@@ -17,8 +17,8 @@ class XSweepDB extends Dexie {
   lists!: Table<SmartList>;
   unfollowLog!: Table<UnfollowEntry>;
 
-  constructor() {
-    super("xsweep");
+  constructor(name = "xsweep") {
+    super(name);
     this.version(1).stores({
       users: "userId, username, status, *listIds, scannedAt",
       snapshots: "++id, date",
@@ -34,7 +34,38 @@ class XSweepDB extends Dexie {
   }
 }
 
-export const db = new XSweepDB();
+// DB instance — scoped per X user to prevent data mixing across accounts
+let db = new XSweepDB();
+
+/**
+ * Switch the DB to a user-scoped instance.
+ * Call this when the logged-in X user is identified.
+ */
+export async function switchToUserDb(userId: string): Promise<void> {
+  const dbName = `xsweep_${userId}`;
+  if (db.name === dbName) return;
+  db.close();
+  db = new XSweepDB(dbName);
+  await chrome.storage.local.set({ xsweep_active_user: userId });
+}
+
+/**
+ * Restore the user-scoped DB from storage on startup.
+ */
+export async function restoreUserDb(): Promise<void> {
+  try {
+    const data = await chrome.storage.local.get("xsweep_active_user");
+    if (data.xsweep_active_user) {
+      const dbName = `xsweep_${data.xsweep_active_user}`;
+      if (db.name !== dbName) {
+        db.close();
+        db = new XSweepDB(dbName);
+      }
+    }
+  } catch {
+    // Not in extension context (tests)
+  }
+}
 
 // ---- User operations ----
 
@@ -151,4 +182,12 @@ export async function clearAllData(): Promise<void> {
   await db.snapshots.clear();
   await db.lists.clear();
   await db.unfollowLog.clear();
+}
+
+// ---- Test helpers ----
+
+/** Reset DB between tests. Only use in test environment. */
+export async function resetTestDb(): Promise<void> {
+  await db.delete();
+  await db.open();
 }

@@ -10,25 +10,37 @@ XSweep is a privacy-first Chrome extension for managing who you follow on X (Twi
 
 Account health score (A–F) with AI-powered coaching tips. See at a glance how healthy your following list is.
 
+![Dashboard](docs/screenshots/dashboard.png)
+
 ### Audit
 
 Browse everyone you follow with orthogonal filters: combine relationship status (mutual, non-mutual), account status (active, inactive, suspended), follower count ranges, and more. Sort by any column.
+
+![Audit](docs/screenshots/audit.png)
 
 ### Smart Lists
 
 Organize your following into keyword-based or AI-categorized lists. Sync lists directly to X so they show up in your native X sidebar.
 
+![Smart Lists](docs/screenshots/lists.png)
+
 ### AI Review
 
 Bring your own Claude API key to categorize accounts automatically. XSweep sends account metadata to Anthropic's API — never credentials or cookies.
+
+![AI Review](docs/screenshots/review.png)
 
 ### Mass Unfollow
 
 Select accounts to unfollow in bulk with a Gmail-style undo pattern — every unfollow has a 4-second undo window before it executes.
 
+![Mass Unfollow](docs/screenshots/unfollow.png)
+
 ### Monetization Intelligence
 
 Track your X monetization eligibility, estimate payouts, and find your best posting times. No other follow-management tool offers this.
+
+![Monetization Intelligence](docs/screenshots/monetization.png)
 
 ## Privacy
 

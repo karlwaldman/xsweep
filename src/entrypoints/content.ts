@@ -4,26 +4,7 @@
  * Communicates with side panel via chrome.runtime messages.
  */
 
-import {
-  extractBearerToken,
-  isAuthenticated,
-  getHeaders,
-  getMyUserId,
-} from "../core/auth";
-import {
-  fullScan,
-  stopScan,
-  scanVerifiedFollowers,
-  scanOwnTweets,
-  stopMonetizationScan,
-} from "../core/scanner";
-import { bulkUnfollow, stopUnfollow } from "../core/unfollower";
-import {
-  fetchMyLists,
-  fetchListMembers,
-  createXList,
-  addListMember,
-} from "../core/lists-api";
+import { extractBearerToken, getHeaders, getMyUserId } from "../core/auth";
 import type { MessageType, ScanProgress } from "../core/types";
 
 export default defineContentScript({
@@ -69,6 +50,7 @@ async function handleMessage(
     case "START_SCAN": {
       try {
         await extractBearerToken();
+        const { fullScan } = await import("../core/scanner");
         const result = await fullScan(
           (progress: ScanProgress) => {
             sendMessage({ type: "SCAN_PROGRESS", data: progress });
@@ -85,6 +67,7 @@ async function handleMessage(
         // Send final data to background for relationship update + storage
         await chrome.runtime.sendMessage({
           type: "FINALIZE_SCAN",
+          userId: getMyUserId(),
           followerIds: result.followerIds,
           followingIds: result.followingIds,
         });
@@ -103,6 +86,7 @@ async function handleMessage(
     }
 
     case "STOP_SCAN": {
+      const { stopScan } = await import("../core/scanner");
       stopScan();
       sendResponse({ success: true });
       break;
@@ -111,6 +95,7 @@ async function handleMessage(
     case "START_UNFOLLOW": {
       try {
         await extractBearerToken();
+        const { bulkUnfollow } = await import("../core/unfollower");
         const users = message.userIds.map((id) => ({
           userId: id,
           username: id, // will be resolved from DB
@@ -141,6 +126,7 @@ async function handleMessage(
     }
 
     case "STOP_UNFOLLOW": {
+      const { stopUnfollow } = await import("../core/unfollower");
       stopUnfollow();
       sendResponse({ success: true });
       break;
@@ -149,6 +135,7 @@ async function handleMessage(
     case "FETCH_X_LISTS": {
       try {
         await extractBearerToken();
+        const { fetchMyLists } = await import("../core/lists-api");
         const lists = await fetchMyLists();
         sendResponse({ success: true, lists });
       } catch (e) {
@@ -161,6 +148,7 @@ async function handleMessage(
     case "FETCH_X_LIST_MEMBERS": {
       try {
         await extractBearerToken();
+        const { fetchListMembers } = await import("../core/lists-api");
         const members = await fetchListMembers(message.listId);
         sendResponse({ success: true, members });
       } catch (e) {
@@ -173,6 +161,7 @@ async function handleMessage(
     case "CREATE_X_LIST": {
       try {
         await extractBearerToken();
+        const { createXList } = await import("../core/lists-api");
         const list = await createXList(
           message.name,
           message.description,
@@ -189,6 +178,7 @@ async function handleMessage(
     case "ADD_X_LIST_MEMBER": {
       try {
         await extractBearerToken();
+        const { addListMember } = await import("../core/lists-api");
         await addListMember(message.listId, message.userId);
         sendResponse({ success: true });
       } catch (e) {
@@ -232,6 +222,8 @@ async function handleMessage(
     case "SCAN_MONETIZATION": {
       try {
         await extractBearerToken();
+        const { scanVerifiedFollowers, scanOwnTweets } =
+          await import("../core/scanner");
         const userId = getMyUserId();
 
         // Phase 1: Scan followers
@@ -288,6 +280,7 @@ async function handleMessage(
     }
 
     case "STOP_MONETIZATION": {
+      const { stopMonetizationScan } = await import("../core/scanner");
       stopMonetizationScan();
       sendResponse({ success: true });
       break;

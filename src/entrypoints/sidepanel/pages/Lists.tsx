@@ -64,13 +64,14 @@ export default function Lists({ showToast }: Props) {
 
   async function loadLists() {
     const allLists = await getAllLists();
-    const listsWithUsers: ListWithUsers[] = [];
-    for (const list of allLists) {
-      if (list.id !== undefined) {
-        const users = await getUsersByListId(list.id);
-        listsWithUsers.push({ ...list, users });
-      }
-    }
+    const listsWithUsers = await Promise.all(
+      allLists
+        .filter((list) => list.id !== undefined)
+        .map(async (list) => ({
+          ...list,
+          users: await getUsersByListId(list.id!),
+        })),
+    );
     setLists(listsWithUsers);
   }
 

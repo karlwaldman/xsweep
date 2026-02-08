@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
-  db,
+  resetTestDb,
   upsertUsers,
   getAllUsers,
   getUsersByStatus,
@@ -25,9 +25,7 @@ import { makeUser, makeList, makeSnapshot } from "../helpers/fixtures";
 
 describe("db", () => {
   beforeEach(async () => {
-    // Reset DB between tests
-    await db.delete();
-    await db.open();
+    await resetTestDb();
   });
 
   // ---- User operations ----

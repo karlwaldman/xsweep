@@ -9,11 +9,16 @@ import {
   getAllLists,
   updateUserListIds,
   upsertUsers,
+  switchToUserDb,
+  restoreUserDb,
 } from "../storage/db";
 import type { MessageType } from "../core/types";
 
 export default defineBackground(() => {
   console.log("[XSweep] Background worker started");
+
+  // Restore user-scoped DB from previous session
+  restoreUserDb();
 
   // Open side panel when extension icon is clicked
   chrome.action.onClicked.addListener(async (tab) => {
@@ -46,7 +51,10 @@ export default defineBackground(() => {
       }
 
       if (message.type === "FINALIZE_SCAN") {
-        handleFinalizeScan(message.followerIds, message.followingIds)
+        switchToUserDb(message.userId)
+          .then(() =>
+            handleFinalizeScan(message.followerIds, message.followingIds),
+          )
           .then(() => sendResponse({ success: true }))
           .catch((e) => sendResponse({ success: false, error: e.message }));
         return true;

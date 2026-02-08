@@ -98,18 +98,19 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
         );
       }
       if (message.type === "MONETIZATION_COMPLETE" && message.data) {
-        const d = message.data as Record<string, unknown>;
-        const impressions = (d.organicImpressions as number) || 0;
-        const totalReplies = (d.totalReplies as number) || 0;
-        const totalRetweets = (d.totalRetweets as number) || 0;
-        const totalLikes = (d.totalLikes as number) || 0;
-        const tweetsLast90 = (d.tweetsLast90Days as number) || 0;
-        const totalFollowers = (d.totalFollowers as number) || 0;
-        const verifiedFollowers = (d.verifiedFollowers as number) || 0;
-        const mediaTweetCount = (d.mediaTweetCount as number) || 0;
-        const threadCount = (d.threadCount as number) || 0;
-        const threadImpressions = (d.threadImpressions as number) || 0;
-        const singleImpressions = (d.singleImpressions as number) || 0;
+        const d = message.data;
+        const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+        const impressions = num(d.organicImpressions);
+        const totalReplies = num(d.totalReplies);
+        const totalRetweets = num(d.totalRetweets);
+        const totalLikes = num(d.totalLikes);
+        const tweetsLast90 = num(d.tweetsLast90Days);
+        const totalFollowers = num(d.totalFollowers);
+        const verifiedFollowers = num(d.verifiedFollowers);
+        const mediaTweetCount = num(d.mediaTweetCount);
+        const threadCount = num(d.threadCount);
+        const threadImpressions = num(d.threadImpressions);
+        const singleImpressions = num(d.singleImpressions);
 
         // Compute derived metrics
         const totalEngagement = totalReplies + totalRetweets + totalLikes;
@@ -133,14 +134,12 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
           avgSingleEng > 0 ? avgThreadEng / avgSingleEng : 0;
 
         // Compute peak hours/days from engagement maps
-        const hourlyEntries =
-          (d.hourlyEngagement as Array<
-            [number, { total: number; count: number }]
-          >) || [];
-        const dailyEntries =
-          (d.dailyEngagement as Array<
-            [number, { total: number; count: number }]
-          >) || [];
+        const hourlyEntries = Array.isArray(d.hourlyEngagement)
+          ? d.hourlyEngagement
+          : [];
+        const dailyEntries = Array.isArray(d.dailyEngagement)
+          ? d.dailyEngagement
+          : [];
 
         const peakHours = hourlyEntries
           .map(([hour, { total, count }]) => ({
@@ -161,15 +160,18 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
           .map((e) => e.day);
 
         const partial: MonetizationData = {
-          userId: (d.userId as string) || "",
+          userId: typeof d.userId === "string" ? d.userId : "",
           verifiedFollowers,
           totalFollowers,
           organicImpressions: impressions,
-          impressionsAvailable: (d.impressionsAvailable as boolean) || false,
-          tweetsLast30Days: (d.tweetsLast30Days as number) || 0,
+          impressionsAvailable:
+            typeof d.impressionsAvailable === "boolean"
+              ? d.impressionsAvailable
+              : false,
+          tweetsLast30Days: num(d.tweetsLast30Days),
           tweetsLast90Days: tweetsLast90,
-          avgViewsPerTweet: (d.avgViewsPerTweet as number) || 0,
-          topTweetViews: (d.topTweetViews as number) || 0,
+          avgViewsPerTweet: num(d.avgViewsPerTweet),
+          topTweetViews: num(d.topTweetViews),
           manualImpressions: monetization?.manualImpressions ?? 0,
           identityVerified: monetization?.identityVerified ?? false,
           lastChecked: new Date().toISOString(),
@@ -189,12 +191,11 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
           peakDays,
           // Verified intelligence
           verifiedFollowerPercent,
-          topVerifiedFollowers:
-            (d.topVerifiedFollowers as MonetizationData["topVerifiedFollowers"]) ||
-            [],
+          topVerifiedFollowers: Array.isArray(d.topVerifiedFollowers)
+            ? d.topVerifiedFollowers
+            : [],
           // Geo
-          topLocations:
-            (d.topLocations as MonetizationData["topLocations"]) || [],
+          topLocations: Array.isArray(d.topLocations) ? d.topLocations : [],
           // Payout — computed after object created
           estimatedMonthlyPayout: 0,
           projectedAnnualPayout: 0,

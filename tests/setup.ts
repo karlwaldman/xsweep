@@ -2,6 +2,7 @@
  * Vitest global setup — stubs browser APIs not available in happy-dom.
  */
 import { vi } from "vitest";
+import "fake-indexeddb/auto";
 
 // In-memory storage for chrome.storage.local (exported for test cleanup)
 export const chromeStorageData: Record<string, unknown> = {};

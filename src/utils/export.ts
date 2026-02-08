@@ -4,6 +4,15 @@
 
 import type { UserProfile } from "../core/types";
 
+function sanitizeCSVField(value: string): string {
+  let safe = value.replace(/"/g, '""').replace(/\n/g, " ");
+  // Prevent CSV formula injection in Excel
+  if (/^[=+\-@\t\r]/.test(safe)) {
+    safe = `'${safe}`;
+  }
+  return `"${safe}"`;
+}
+
 function downloadFile(
   content: string,
   filename: string,
@@ -48,8 +57,8 @@ export function exportUsersCSV(users: UserProfile[], filename?: string): void {
   const rows = users.map((u) => {
     const days = u.daysSinceLastTweet ?? "N/A";
     return [
-      u.username,
-      `"${(u.displayName || "").replace(/"/g, '""')}"`,
+      sanitizeCSVField(u.username),
+      sanitizeCSVField(u.displayName || ""),
       u.userId,
       u.followerCount,
       u.followingCount,
@@ -59,7 +68,7 @@ export function exportUsersCSV(users: UserProfile[], filename?: string): void {
       u.status,
       u.isMutual ? "yes" : "no",
       u.isVerified ? "yes" : "no",
-      `"${(u.bio || "").replace(/"/g, '""').replace(/\n/g, " ")}"`,
+      sanitizeCSVField(u.bio || ""),
     ].join(",");
   });
 

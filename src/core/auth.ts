@@ -41,6 +41,7 @@ export async function extractBearerToken(): Promise<string> {
     try {
       console.log(`[XSweep] Checking bundle: ${url.split("/").pop()}`);
       const resp = await fetch(url);
+      if (!resp.ok) continue;
       const text = await resp.text();
       const match = text.match(/"(AAAA[A-Za-z0-9%]{30,})"/);
       if (match) {
@@ -57,6 +58,7 @@ export async function extractBearerToken(): Promise<string> {
   console.log("[XSweep] Trying fallback: page source bundle URLs...");
   try {
     const resp = await fetch(location.href);
+    if (!resp.ok) throw new Error(`Page fetch failed: ${resp.status}`);
     const html = await resp.text();
     const bundleMatches = html.matchAll(
       /src="(https:\/\/abs\.twimg\.com\/responsive-web\/client-web[^"]+\.js)"/g,
@@ -68,6 +70,7 @@ export async function extractBearerToken(): Promise<string> {
       try {
         console.log(`[XSweep] Fallback bundle: ${bm[1].split("/").pop()}`);
         const resp2 = await fetch(bm[1]);
+        if (!resp2.ok) continue;
         const text = await resp2.text();
         const match = text.match(/"(AAAA[A-Za-z0-9%]{30,})"/);
         if (match) {

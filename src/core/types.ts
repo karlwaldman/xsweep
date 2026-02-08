@@ -119,6 +119,7 @@ export type MessageType =
   | { type: "STORE_USERS_BATCH"; users: UserProfile[] }
   | {
       type: "FINALIZE_SCAN";
+      userId: string;
       followerIds: string[];
       followingIds: string[];
     }

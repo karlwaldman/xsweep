@@ -350,12 +350,22 @@ export async function fullScan(
     `[XSweep] Step 1 done: ${followingIds.length} following IDs (${((Date.now() - startTime) / 1000).toFixed(1)}s)`,
   );
 
+  // Check abort between phases
+  if (abortController?.signal.aborted) {
+    return { followingIds, followerIds: [], users: [] };
+  }
+
   // Step 2: Collect follower IDs (for mutual detection)
   console.log("[XSweep] Step 2/4: Collecting follower IDs...");
   const followerIds = await collectIds("followers/ids.json", onProgress);
   console.log(
     `[XSweep] Step 2 done: ${followerIds.length} follower IDs (${((Date.now() - startTime) / 1000).toFixed(1)}s)`,
   );
+
+  // Check abort between phases
+  if (abortController?.signal.aborted) {
+    return { followingIds, followerIds, users: [] };
+  }
 
   // Step 3: Hydrate following users
   console.log("[XSweep] Step 3/5: Hydrating following profiles...");
@@ -379,6 +389,11 @@ export async function fullScan(
   console.log(
     `[XSweep] Step 3 done: ${users.length} following profiles hydrated (${((Date.now() - startTime) / 1000).toFixed(1)}s)`,
   );
+
+  // Check abort between phases
+  if (abortController?.signal.aborted) {
+    return { followingIds, followerIds, users };
+  }
 
   // Step 3.5: Hydrate follower-only profiles
   const followingSet = new Set(followingIds.map(String));

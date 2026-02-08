@@ -58,6 +58,7 @@ describe("extractBearerToken", () => {
   it("finds token matching AAAA... regex in script bundle", async () => {
     setupScripts(["https://abs.twimg.com/client-web/main.abc.js"]);
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
       text: () =>
         Promise.resolve(
           'var config={"bearer":"AAAAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}',
@@ -71,6 +72,7 @@ describe("extractBearerToken", () => {
   it("caches token after first extraction", async () => {
     setupScripts(["https://abs.twimg.com/client-web/main.abc.js"]);
     const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
       text: () => Promise.resolve('a="AAAAyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"'),
     });
     globalThis.fetch = mockFetch;
@@ -86,6 +88,7 @@ describe("extractBearerToken", () => {
   it("throws when no scripts contain bearer token", async () => {
     setupScripts(["https://abs.twimg.com/client-web/main.abc.js"]);
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
       text: () => Promise.resolve("no token here at all"),
     });
 
@@ -102,6 +105,7 @@ describe("extractBearerToken", () => {
     setupScripts(urls);
 
     const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
       text: () => Promise.resolve("no token"),
     });
     globalThis.fetch = mockFetch;
@@ -130,6 +134,7 @@ describe("getHeaders", () => {
       },
     ] as unknown as NodeListOf<Element>);
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
       text: () =>
         Promise.resolve('token="AAAAtokenvalue123456789012345678901"'),
     });
@@ -161,6 +166,7 @@ describe("isAuthenticated", () => {
       },
     ] as unknown as NodeListOf<Element>);
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
       text: () => Promise.resolve('b="AAAAbearer12345678901234567890123456"'),
     });
 
@@ -189,6 +195,7 @@ describe("clearCachedToken", () => {
       },
     ] as unknown as NodeListOf<Element>);
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
       text: () => Promise.resolve('c="AAAAclear12345678901234567890123456789"'),
     });
 
