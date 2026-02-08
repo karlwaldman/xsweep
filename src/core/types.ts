@@ -102,6 +102,7 @@ export type MessageType =
       type: "UNFOLLOW_PROGRESS";
       data: { done: number; total: number; current: string };
     }
+  | { type: "UNFOLLOW_STARTED"; data: { total: number; done: number } }
   | { type: "UNFOLLOW_COMPLETE"; data: { count: number } }
   | { type: "CATEGORIZE_AI"; listId: number; apiKey: string }
   | { type: "CATEGORIZE_AI_COMPLETE"; listId: number }

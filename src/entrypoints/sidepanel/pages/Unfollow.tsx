@@ -4,8 +4,14 @@ import { getInactiveUsers } from "../../../core/relationships";
 import { exportUsersCSV } from "../../../utils/export";
 import { getTodayUnfollowCount, getDailyLimit } from "../../../core/unfollower";
 import type { UserProfile, UnfollowEntry } from "../../../core/types";
+import type { NavigateFn, ShowToastFn } from "../App";
 
-export default function Unfollow() {
+interface Props {
+  navigateTo: NavigateFn;
+  showToast: ShowToastFn;
+}
+
+export default function Unfollow({ navigateTo, showToast }: Props) {
   const [inactive, setInactive] = useState<UserProfile[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [unfollowing, setUnfollowing] = useState(false);
@@ -27,15 +33,10 @@ export default function Unfollow() {
       }
     });
 
-    const listener = (message: {
-      type: string;
-      data?: { done: number; total: number; current: string };
-    }) => {
-      if (message.type === "UNFOLLOW_PROGRESS" && message.data) {
-        // Progress update
-      }
+    const listener = (message: { type: string }) => {
       if (message.type === "UNFOLLOW_COMPLETE") {
         setUnfollowing(false);
+        setSelected(new Set());
         loadData();
       }
     };
@@ -94,11 +95,27 @@ export default function Unfollow() {
       currentWindow: true,
     });
     if (!tab?.url?.includes("x.com")) {
-      alert("Navigate to x.com first, then try again.");
+      showToast("Navigate to x.com first, then try again.");
       return;
     }
 
+    const count = selected.size;
     setUnfollowing(true);
+
+    // Immediate feedback
+    showToast(
+      dryRun
+        ? `Previewing ${count} accounts...`
+        : `Got it! Cleaning up ${count} accounts in the background.`,
+    );
+
+    // Broadcast start so App.tsx shows progress banner
+    chrome.runtime
+      .sendMessage({
+        type: "UNFOLLOW_STARTED",
+        data: { total: count, done: 0 },
+      })
+      .catch(() => {});
 
     // Export backup first
     const toUnfollow = inactive.filter((u) => selected.has(u.userId));
@@ -139,6 +156,26 @@ export default function Unfollow() {
 
   const dailyLimit = getDailyLimit();
   const remaining = dailyLimit - todayCount;
+
+  if (inactive.length === 0 && !unfollowing) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-6">
+        <div className="text-4xl">✨</div>
+        <div className="text-center space-y-1">
+          <div className="text-sm font-medium">No inactive accounts found</div>
+          <div className="text-xs text-x-text-secondary">
+            Run a scan from the Dashboard to find accounts to clean up.
+          </div>
+        </div>
+        <button
+          onClick={() => navigateTo("dashboard")}
+          className="px-4 py-2 bg-x-accent text-white rounded-full text-sm font-medium hover:bg-x-accent-hover transition-colors"
+        >
+          Go to Dashboard
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 space-y-4">
@@ -294,7 +331,15 @@ export default function Unfollow() {
               <div className="w-7 h-7 rounded-full bg-x-border flex-shrink-0" />
             )}
             <div className="flex-1 min-w-0">
-              <div className="text-sm truncate">@{user.username}</div>
+              <a
+                href={`https://x.com/${user.username}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm truncate text-x-accent hover:underline block"
+                onClick={(e) => e.stopPropagation()}
+              >
+                @{user.username}
+              </a>
               <div className="text-[10px] text-x-text-secondary">
                 {user.status} · {user.daysSinceLastTweet ?? "N/A"} days ·{" "}
                 {user.followerCount.toLocaleString()} followers

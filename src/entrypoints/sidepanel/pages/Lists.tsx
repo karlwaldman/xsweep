@@ -9,6 +9,7 @@ import {
 } from "../../../storage/db";
 import { batchCategorizeByKeywords } from "../../../core/categorizer";
 import type { SmartList, UserProfile } from "../../../core/types";
+import type { ShowToastFn } from "../App";
 
 const MAX_FREE_LISTS = 3;
 
@@ -16,7 +17,11 @@ interface ListWithUsers extends SmartList {
   users: UserProfile[];
 }
 
-export default function Lists() {
+interface Props {
+  showToast: ShowToastFn;
+}
+
+export default function Lists({ showToast }: Props) {
   const [lists, setLists] = useState<ListWithUsers[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -74,12 +79,13 @@ export default function Lists() {
     }
 
     await loadLists();
+    showToast(`Created list "${newName.trim()}"`);
   }
 
   async function runKeywordCategorization() {
     const users = await getAllUsers();
     if (users.length === 0) {
-      alert("No scanned users found. Run a scan from the Dashboard first.");
+      showToast("No scanned users. Run a scan from Dashboard first.");
       return;
     }
 
@@ -103,7 +109,7 @@ export default function Lists() {
 
   async function handleRunAI(listId: number) {
     if (!apiKey) {
-      alert("Set your Claude API key in Settings first.");
+      showToast("Set your Claude API key in Settings first.");
       return;
     }
     setCategorizing(true);
@@ -127,9 +133,10 @@ export default function Lists() {
     chrome.runtime.onMessage.addListener(listener);
   }
 
-  async function handleDeleteList(id: number) {
+  async function handleDeleteList(id: number, name: string) {
     await deleteList(id);
     await loadLists();
+    showToast(`Deleted list "${name}"`);
   }
 
   const keywordListCount = lists.filter((l) => l.type === "keyword").length;
@@ -324,7 +331,14 @@ export default function Lists() {
                         ) : (
                           <div className="w-5 h-5 rounded-full bg-x-border" />
                         )}
-                        <span className="text-xs">@{user.username}</span>
+                        <a
+                          href={`https://x.com/${user.username}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-x-accent hover:underline"
+                        >
+                          @{user.username}
+                        </a>
                       </div>
                     ))}
                     {list.users.length > 20 && (
@@ -336,7 +350,7 @@ export default function Lists() {
 
                   <div className="flex gap-2 pt-2 border-t border-x-border mt-2">
                     <button
-                      onClick={() => handleDeleteList(list.id!)}
+                      onClick={() => handleDeleteList(list.id!, list.name)}
                       className="text-xs text-x-red hover:text-red-400"
                     >
                       Delete list

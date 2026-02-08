@@ -13,14 +13,22 @@ export default function Settings() {
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [stats, setStats] = useState({ users: 0, lists: 0, unfollows: 0 });
   const [confirmClear, setConfirmClear] = useState(false);
+  const [lastScan, setLastScan] = useState<string | null>(null);
+  const [whitelist, setWhitelist] = useState<string[]>([]);
 
   useEffect(() => {
     loadSettings();
   }, []);
 
   async function loadSettings() {
-    const data = await chrome.storage.local.get("xsweep_claude_api_key");
+    const data = await chrome.storage.local.get([
+      "xsweep_claude_api_key",
+      "xsweep_last_scan",
+      "xsweep_whitelist",
+    ]);
     if (data.xsweep_claude_api_key) setApiKey(data.xsweep_claude_api_key);
+    if (data.xsweep_last_scan) setLastScan(data.xsweep_last_scan);
+    if (data.xsweep_whitelist) setWhitelist(data.xsweep_whitelist);
 
     setStats({
       users: await getUserCount(),
@@ -100,6 +108,58 @@ export default function Settings() {
           Save Key
         </button>
       </div>
+
+      {/* Scan Info */}
+      <div className="bg-x-card rounded-xl p-4 space-y-2">
+        <h3 className="text-sm font-medium">Scan Status</h3>
+        <div className="text-xs text-x-text-secondary">
+          {lastScan ? (
+            <>
+              Last scan:{" "}
+              {new Date(lastScan).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </>
+          ) : (
+            "No scans yet. Run one from the Dashboard."
+          )}
+        </div>
+      </div>
+
+      {/* Whitelist */}
+      {whitelist.length > 0 && (
+        <div className="bg-x-card rounded-xl p-4 space-y-2">
+          <h3 className="text-sm font-medium">
+            Protected Accounts ({whitelist.length})
+          </h3>
+          <div className="flex flex-wrap gap-1">
+            {whitelist.map((name) => (
+              <span
+                key={name}
+                className="text-[10px] bg-x-green/10 text-x-green px-1.5 py-0.5 rounded inline-flex items-center gap-1"
+              >
+                @{name}
+                <button
+                  onClick={async () => {
+                    const next = whitelist.filter((n) => n !== name);
+                    setWhitelist(next);
+                    await chrome.storage.local.set({
+                      xsweep_whitelist: next,
+                    });
+                  }}
+                  className="hover:text-x-red"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Export */}
       <div className="bg-x-card rounded-xl p-4 space-y-2">

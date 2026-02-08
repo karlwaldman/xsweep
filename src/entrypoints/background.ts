@@ -77,6 +77,7 @@ export default defineBackground(() => {
       message.type === "SCAN_PROGRESS" ||
       message.type === "SCAN_COMPLETE" ||
       message.type === "SCAN_ERROR" ||
+      message.type === "UNFOLLOW_STARTED" ||
       message.type === "UNFOLLOW_PROGRESS" ||
       message.type === "UNFOLLOW_COMPLETE" ||
       message.type === "AUTH_STATUS"

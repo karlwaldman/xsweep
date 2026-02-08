@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getAllUsers } from "../../../storage/db";
 import type { UserProfile, ScanProgress } from "../../../core/types";
+import type { NavigateFn, ShowToastFn } from "../App";
 
 type SortKey = "username" | "followerCount" | "daysSinceLastTweet" | "status";
 type FilterStatus =
@@ -12,19 +13,32 @@ type FilterStatus =
   | "mutual"
   | "non_mutual";
 
-export default function Audit() {
+interface Props {
+  initialFilter?: string;
+  navigateTo: NavigateFn;
+  showToast: ShowToastFn;
+}
+
+export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [filter, setFilter] = useState<FilterStatus>("all");
+  const [filter, setFilter] = useState<FilterStatus>(
+    (initialFilter as FilterStatus) || "all",
+  );
   const [sort, setSort] = useState<SortKey>("daysSinceLastTweet");
   const [sortDesc, setSortDesc] = useState(true);
   const [search, setSearch] = useState("");
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [page, setPage] = useState(0);
+  const [whitelist, setWhitelist] = useState<Set<string>>(new Set());
+  const [unfollowingUser, setUnfollowingUser] = useState<string | null>(null);
+  const [confirmUnfollow, setConfirmUnfollow] = useState<string | null>(null);
+  const [fadingOut, setFadingOut] = useState<Set<string>>(new Set());
   const PAGE_SIZE = 50;
 
   useEffect(() => {
     loadUsers();
+    loadWhitelist();
     const listener = (message: { type: string; data?: ScanProgress }) => {
       if (message.type === "SCAN_PROGRESS" && message.data) {
         setScanning(true);
@@ -40,12 +54,82 @@ export default function Audit() {
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
+  // Reset filter when initialFilter prop changes
+  useEffect(() => {
+    if (initialFilter) {
+      setFilter(initialFilter as FilterStatus);
+      setPage(0);
+    }
+  }, [initialFilter]);
+
   async function loadUsers() {
     const all = await getAllUsers();
     setUsers(all);
   }
 
+  async function loadWhitelist() {
+    const data = await chrome.storage.local.get("xsweep_whitelist");
+    if (data.xsweep_whitelist) {
+      setWhitelist(new Set(data.xsweep_whitelist));
+    }
+  }
+
+  async function handleInlineUnfollow(user: UserProfile) {
+    if (confirmUnfollow !== user.userId) {
+      setConfirmUnfollow(user.userId);
+      return;
+    }
+
+    // Verified confirm tap — do the unfollow
+    setConfirmUnfollow(null);
+    setUnfollowingUser(user.userId);
+
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (!tab?.url?.includes("x.com") || !tab?.id) {
+      showToast("Navigate to x.com first");
+      setUnfollowingUser(null);
+      return;
+    }
+
+    chrome.tabs.sendMessage(tab.id, {
+      type: "START_UNFOLLOW",
+      userIds: [user.userId],
+      dryRun: false,
+    });
+
+    // Fade out the row
+    setFadingOut((prev) => new Set([...prev, user.userId]));
+    setTimeout(() => {
+      setFadingOut((prev) => {
+        const next = new Set(prev);
+        next.delete(user.userId);
+        return next;
+      });
+      loadUsers();
+    }, 500);
+
+    setUnfollowingUser(null);
+    showToast(`Unfollowed @${user.username}`, {
+      label: "Undo",
+      onClick: () => {
+        // Re-follow not supported via API easily, just reload
+        showToast("Re-follow from their profile on x.com");
+      },
+    });
+  }
+
+  async function handleProtect(user: UserProfile) {
+    const next = new Set([...whitelist, user.username.toLowerCase()]);
+    setWhitelist(next);
+    await chrome.storage.local.set({ xsweep_whitelist: [...next] });
+    showToast(`Protected @${user.username}`);
+  }
+
   const filtered = users
+    .filter((u) => !whitelist.has(u.username.toLowerCase()) || filter === "all")
     .filter((u) => {
       if (filter === "mutual") return u.isMutual;
       if (filter === "non_mutual") return !u.isMutual && !u.isFollower;
@@ -190,7 +274,17 @@ export default function Audit() {
       {/* User List */}
       <div className="space-y-1">
         {paginated.map((user) => (
-          <UserRow key={user.userId} user={user} />
+          <UserRow
+            key={user.userId}
+            user={user}
+            isFadingOut={fadingOut.has(user.userId)}
+            isConfirming={confirmUnfollow === user.userId}
+            isUnfollowing={unfollowingUser === user.userId}
+            isProtected={whitelist.has(user.username.toLowerCase())}
+            onUnfollow={() => handleInlineUnfollow(user)}
+            onCancelUnfollow={() => setConfirmUnfollow(null)}
+            onProtect={() => handleProtect(user)}
+          />
         ))}
       </div>
 
@@ -220,7 +314,25 @@ export default function Audit() {
   );
 }
 
-function UserRow({ user }: { user: UserProfile }) {
+function UserRow({
+  user,
+  isFadingOut,
+  isConfirming,
+  isUnfollowing,
+  isProtected,
+  onUnfollow,
+  onCancelUnfollow,
+  onProtect,
+}: {
+  user: UserProfile;
+  isFadingOut: boolean;
+  isConfirming: boolean;
+  isUnfollowing: boolean;
+  isProtected: boolean;
+  onUnfollow: () => void;
+  onCancelUnfollow: () => void;
+  onProtect: () => void;
+}) {
   const statusColors: Record<string, string> = {
     active: "text-x-green",
     inactive: "text-x-yellow",
@@ -231,7 +343,11 @@ function UserRow({ user }: { user: UserProfile }) {
   };
 
   return (
-    <div className="flex items-start gap-3 p-2 rounded-lg hover:bg-x-card transition-colors">
+    <div
+      className={`flex items-start gap-3 p-2 rounded-lg hover:bg-x-card transition-all ${
+        isFadingOut ? "opacity-0 h-0 overflow-hidden" : "opacity-100"
+      }`}
+    >
       {user.profileImageUrl ? (
         <img
           src={user.profileImageUrl}
@@ -252,9 +368,23 @@ function UserRow({ user }: { user: UserProfile }) {
             </span>
           )}
           {user.isVerified && <span className="text-[10px]">✓</span>}
+          {isProtected && (
+            <span className="text-[10px] bg-x-green/20 text-x-green px-1 rounded">
+              protected
+            </span>
+          )}
         </div>
         <div className="text-xs text-x-text-secondary">
-          @{user.username} · {user.followerCount.toLocaleString()} followers
+          <a
+            href={`https://x.com/${user.username}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-x-accent hover:underline"
+          >
+            @{user.username}
+          </a>
+          {" · "}
+          {user.followerCount.toLocaleString()} followers
         </div>
         {user.bio && (
           <div className="text-xs text-x-text-secondary mt-0.5 line-clamp-1">
@@ -262,16 +392,78 @@ function UserRow({ user }: { user: UserProfile }) {
           </div>
         )}
       </div>
-      <div className="flex flex-col items-end flex-shrink-0">
-        <span
-          className={`text-[10px] font-medium ${statusColors[user.status] || ""}`}
-        >
-          {user.status}
-        </span>
-        {user.daysSinceLastTweet !== null && (
-          <span className="text-[10px] text-x-text-secondary">
-            {user.daysSinceLastTweet}d ago
+      <div className="flex items-center gap-1 flex-shrink-0">
+        <div className="flex flex-col items-end mr-1">
+          <span
+            className={`text-[10px] font-medium ${statusColors[user.status] || ""}`}
+          >
+            {user.status}
           </span>
+          {user.daysSinceLastTweet !== null && (
+            <span className="text-[10px] text-x-text-secondary">
+              {user.daysSinceLastTweet}d ago
+            </span>
+          )}
+        </div>
+        {/* Protect button */}
+        {!isProtected && (
+          <button
+            onClick={onProtect}
+            className="p-1 text-x-text-secondary hover:text-x-green transition-colors"
+            title="Protect (never unfollow)"
+          >
+            <svg
+              className="w-3.5 h-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
+              />
+            </svg>
+          </button>
+        )}
+        {/* Unfollow button */}
+        {isConfirming ? (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onUnfollow}
+              disabled={isUnfollowing}
+              className="text-[10px] text-x-red font-medium hover:text-red-400 px-1"
+            >
+              {isUnfollowing ? "..." : "Unfollow?"}
+            </button>
+            <button
+              onClick={onCancelUnfollow}
+              className="text-[10px] text-x-text-secondary hover:text-x-text px-1"
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={onUnfollow}
+            className="p-1 text-x-text-secondary hover:text-x-red transition-colors"
+            title="Unfollow"
+          >
+            <svg
+              className="w-3.5 h-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
         )}
       </div>
     </div>
