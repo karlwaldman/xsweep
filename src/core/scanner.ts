@@ -7,6 +7,20 @@ import { getHeaders, getMyUserId } from "./auth";
 import { delay } from "../utils/rate-limiter";
 import type { UserProfile, UserStatus, ScanProgress } from "./types";
 
+export interface VerifiedFollowerResult {
+  verified: number;
+  total: number;
+}
+
+export interface OwnTweetsResult {
+  impressions: number;
+  impressionsAvailable: boolean;
+  tweetsLast30: number;
+  tweetsLast90: number;
+  avgViews: number;
+  topViews: number;
+}
+
 const INACTIVE_DAYS = 365;
 
 type ProgressCallback = (progress: ScanProgress) => void;
@@ -86,7 +100,7 @@ export async function collectIds(
     if (!nextCursor || nextCursor === "0") break;
     cursor = nextCursor;
 
-    await delay(2, 4);
+    await delay(3, 6);
   }
 
   console.log(
@@ -229,6 +243,10 @@ export async function hydrateUsers(
         isFollower: false, // computed later in relationships
         isMutual: false, // computed later in relationships
         isVerified: u.verified || false,
+        location: u.location || "",
+        url: u.url || "",
+        createdAt: u.created_at || "",
+        isBlueVerified: u.is_blue_verified || false,
         listIds: [],
         scannedAt: new Date().toISOString(),
         profileImageUrl: u.profile_image_url_https || "",
@@ -250,7 +268,7 @@ export async function hydrateUsers(
     if (!nextCursor || nextCursor === "0") break;
     cursor = nextCursor;
 
-    await delay(2, 4);
+    await delay(3, 5);
   }
 
   // Mark IDs not returned by list endpoint
@@ -270,6 +288,10 @@ export async function hydrateUsers(
         isFollower: false,
         isMutual: false,
         isVerified: false,
+        location: "",
+        url: "",
+        createdAt: "",
+        isBlueVerified: false,
         listIds: [],
         scannedAt: new Date().toISOString(),
         profileImageUrl: "",
@@ -361,4 +383,238 @@ export async function fullScan(
     `[XSweep] === FULL SCAN COMPLETE === ${users.length} users in ${elapsed}s`,
   );
   return { followingIds, followerIds, users };
+}
+
+let monetizationAbort: AbortController | null = null;
+
+export function stopMonetizationScan(): void {
+  monetizationAbort?.abort();
+  monetizationAbort = null;
+}
+
+/**
+ * Scan followers via followers/list.json and count verified users.
+ * Paginates through all followers (200 per page).
+ */
+export async function scanVerifiedFollowers(
+  onProgress?: (progress: { done: number; total: number }) => void,
+): Promise<VerifiedFollowerResult> {
+  const userId = getMyUserId();
+  let cursor = "-1";
+  let verified = 0;
+  let total = 0;
+  const seen = new Set<string>();
+  let consecutiveDupes = 0;
+  const MAX_PAGES = 250; // 250 * 200 = 50k max followers
+  let page = 0;
+
+  monetizationAbort = new AbortController();
+  console.log("[XSweep] scanVerifiedFollowers: starting");
+
+  while (true) {
+    if (!monetizationAbort || monetizationAbort.signal.aborted) break;
+    if (page >= MAX_PAGES) break;
+
+    const params = new URLSearchParams({
+      user_id: userId,
+      count: "200",
+      cursor,
+      skip_status: "true",
+      include_user_entities: "false",
+    });
+
+    const resp = await fetch(
+      `https://x.com/i/api/1.1/followers/list.json?${params}`,
+      {
+        headers: getHeaders(),
+        credentials: "include",
+        signal: monetizationAbort.signal,
+      },
+    );
+
+    if (resp.status === 429) {
+      console.log("[XSweep] Rate limited on followers. Waiting 60s...");
+      await delay(60, 90);
+      continue;
+    }
+
+    if (!resp.ok) {
+      throw new Error(`followers/list.json error: ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    const users = data.users || [];
+
+    if (users.length === 0) break;
+
+    // Loop detection
+    let dupeCount = 0;
+    for (const u of users) {
+      const uid = String(u.id_str || u.id);
+      if (seen.has(uid)) {
+        dupeCount++;
+        continue;
+      }
+      seen.add(uid);
+      total++;
+      if (u.verified || u.is_blue_verified) verified++;
+    }
+
+    if (dupeCount === users.length) {
+      consecutiveDupes++;
+      if (consecutiveDupes >= 3) {
+        console.log("[XSweep] Loop detected in followers. Stopping.");
+        break;
+      }
+    } else {
+      consecutiveDupes = 0;
+    }
+
+    page++;
+    onProgress?.({ done: total, total: total }); // total grows as we discover
+
+    console.log(
+      `[XSweep] scanVerifiedFollowers: page ${page}, ${verified} verified / ${total} total`,
+    );
+
+    const nextCursor = data.next_cursor_str;
+    if (!nextCursor || nextCursor === "0") break;
+    cursor = nextCursor;
+
+    await delay(3, 5);
+  }
+
+  console.log(
+    `[XSweep] scanVerifiedFollowers: done. ${verified} verified / ${total} total`,
+  );
+  return { verified, total };
+}
+
+/**
+ * Scan own tweets via user_timeline.json.
+ * Attempts to extract view counts from ext_views field.
+ * Paginates back 90 days or 3200 tweets max.
+ */
+export async function scanOwnTweets(
+  onProgress?: (progress: { done: number; total: number }) => void,
+): Promise<OwnTweetsResult> {
+  const userId = getMyUserId();
+  let maxId: string | undefined;
+  let impressions = 0;
+  let impressionsAvailable = false;
+  let tweetsLast30 = 0;
+  let tweetsLast90 = 0;
+  let totalViews = 0;
+  let viewedTweets = 0;
+  let topViews = 0;
+  let totalFetched = 0;
+  const MAX_TWEETS = 3200;
+
+  const now = Date.now();
+  const thirtyDaysAgo = now - 30 * 86400000;
+  const ninetyDaysAgo = now - 90 * 86400000;
+
+  if (!monetizationAbort) monetizationAbort = new AbortController();
+  console.log("[XSweep] scanOwnTweets: starting");
+
+  while (totalFetched < MAX_TWEETS) {
+    if (!monetizationAbort || monetizationAbort.signal.aborted) break;
+
+    const params = new URLSearchParams({
+      user_id: userId,
+      count: "200",
+      trim_user: "true",
+      include_rts: "false",
+      tweet_mode: "extended",
+    });
+    if (maxId) params.set("max_id", maxId);
+
+    const resp = await fetch(
+      `https://x.com/i/api/1.1/statuses/user_timeline.json?${params}`,
+      {
+        headers: getHeaders(),
+        credentials: "include",
+        signal: monetizationAbort.signal,
+      },
+    );
+
+    if (resp.status === 429) {
+      console.log("[XSweep] Rate limited on timeline. Waiting 60s...");
+      await delay(60, 90);
+      continue;
+    }
+
+    if (!resp.ok) {
+      throw new Error(`user_timeline.json error: ${resp.status}`);
+    }
+
+    const tweets = await resp.json();
+    if (!Array.isArray(tweets) || tweets.length === 0) break;
+
+    let reachedOldTweets = false;
+
+    for (const tweet of tweets) {
+      const tweetId = String(tweet.id_str || tweet.id);
+      // Skip the maxId tweet on subsequent pages
+      if (maxId && tweetId === maxId) continue;
+
+      const createdAt = new Date(tweet.created_at).getTime();
+
+      if (createdAt < ninetyDaysAgo) {
+        reachedOldTweets = true;
+        break;
+      }
+
+      tweetsLast90++;
+      if (createdAt >= thirtyDaysAgo) tweetsLast30++;
+
+      // Try to extract view count
+      const views =
+        tweet.ext_views?.count ??
+        tweet.ext?.views?.count ??
+        tweet.views?.count ??
+        null;
+
+      if (views !== null && views !== undefined) {
+        impressionsAvailable = true;
+        const viewCount = Number(views);
+        impressions += viewCount;
+        totalViews += viewCount;
+        viewedTweets++;
+        if (viewCount > topViews) topViews = viewCount;
+      }
+    }
+
+    totalFetched += tweets.length;
+    onProgress?.({ done: totalFetched, total: MAX_TWEETS });
+
+    console.log(
+      `[XSweep] scanOwnTweets: ${totalFetched} tweets fetched, ${tweetsLast90} in 90d, ${impressions} impressions`,
+    );
+
+    if (reachedOldTweets) break;
+
+    // Set maxId to last tweet for pagination
+    const lastTweet = tweets[tweets.length - 1];
+    const lastId = String(lastTweet.id_str || lastTweet.id);
+    if (lastId === maxId) break; // no progress
+    maxId = lastId;
+
+    await delay(2, 4);
+  }
+
+  const avgViews = viewedTweets > 0 ? Math.round(totalViews / viewedTweets) : 0;
+
+  console.log(
+    `[XSweep] scanOwnTweets: done. ${tweetsLast90} tweets, ${impressions} impressions, avg ${avgViews} views`,
+  );
+
+  return {
+    impressions,
+    impressionsAvailable,
+    tweetsLast30,
+    tweetsLast90,
+    avgViews,
+    topViews,
+  };
 }

@@ -12,6 +12,10 @@ export interface UserProfile {
   isFollower: boolean;
   isMutual: boolean;
   isVerified: boolean;
+  location: string;
+  url: string;
+  createdAt: string;
+  isBlueVerified: boolean;
   listIds: number[];
   scannedAt: string;
   profileImageUrl: string;
@@ -124,4 +128,24 @@ export type MessageType =
       description: string;
       mode: "public" | "private";
     }
-  | { type: "ADD_X_LIST_MEMBER"; listId: string; userId: string };
+  | { type: "ADD_X_LIST_MEMBER"; listId: string; userId: string }
+  | { type: "SCAN_MONETIZATION" }
+  | { type: "STOP_MONETIZATION" }
+  | {
+      type: "MONETIZATION_PROGRESS";
+      data: { phase: "followers" | "tweets"; done: number; total: number };
+    }
+  | {
+      type: "MONETIZATION_COMPLETE";
+      data: {
+        verifiedFollowers: number;
+        totalFollowers: number;
+        organicImpressions: number;
+        impressionsAvailable: boolean;
+        tweetsLast30Days: number;
+        tweetsLast90Days: number;
+        avgViewsPerTweet: number;
+        topTweetViews: number;
+      };
+    }
+  | { type: "MONETIZATION_ERROR"; error: string };

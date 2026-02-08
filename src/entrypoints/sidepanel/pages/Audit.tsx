@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { getAllUsers, deleteUser, logUnfollow } from "../../../storage/db";
+import { formatTimeAgo } from "../../../utils/format";
 import type { UserProfile, ScanProgress } from "../../../core/types";
 import type { NavigateFn, ShowToastFn } from "../App";
 
@@ -13,13 +14,35 @@ type FilterStatus =
   | "mutual"
   | "non_mutual";
 
+interface AdvancedFilters {
+  followerMin: number | null;
+  followerMax: number | null;
+  followingMin: number | null;
+  followingMax: number | null;
+  followRatioMin: number | null;
+  verifiedOnly: boolean;
+  lowEngagement: boolean;
+}
+
 interface Props {
   initialFilter?: string;
+  initialFollowerMin?: number;
+  initialFollowerMax?: number;
+  initialSort?: string;
+  initialSortDesc?: boolean;
   navigateTo: NavigateFn;
   showToast: ShowToastFn;
 }
 
-export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
+export default function Audit({
+  initialFilter,
+  initialFollowerMin,
+  initialFollowerMax,
+  initialSort,
+  initialSortDesc,
+  navigateTo,
+  showToast,
+}: Props) {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [filter, setFilter] = useState<FilterStatus>(
     (initialFilter as FilterStatus) || "all",
@@ -32,6 +55,16 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
   const [page, setPage] = useState(0);
   const [whitelist, setWhitelist] = useState<Set<string>>(new Set());
   const [removedUsers, setRemovedUsers] = useState<Set<string>>(new Set());
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advanced, setAdvanced] = useState<AdvancedFilters>({
+    followerMin: null,
+    followerMax: null,
+    followingMin: null,
+    followingMax: null,
+    followRatioMin: null,
+    verifiedOnly: false,
+    lowEngagement: false,
+  });
   const pendingUnfollows = useRef<
     Map<string, { timer: ReturnType<typeof setTimeout>; user: UserProfile }>
   >(new Map());
@@ -62,6 +95,25 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
       setPage(0);
     }
   }, [initialFilter]);
+
+  // Apply navigation params for follower range and sort
+  useEffect(() => {
+    if (initialFollowerMin !== undefined || initialFollowerMax !== undefined) {
+      setAdvanced((prev) => ({
+        ...prev,
+        followerMin: initialFollowerMin ?? null,
+        followerMax: initialFollowerMax ?? null,
+      }));
+      setShowAdvanced(true);
+      setPage(0);
+    }
+    if (initialSort) {
+      setSort(initialSort as SortKey);
+    }
+    if (initialSortDesc !== undefined) {
+      setSortDesc(initialSortDesc);
+    }
+  }, [initialFollowerMin, initialFollowerMax, initialSort, initialSortDesc]);
 
   async function loadUsers() {
     const all = await getAllUsers();
@@ -153,6 +205,41 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
         u.displayName.toLowerCase().includes(q) ||
         u.bio.toLowerCase().includes(q)
       );
+    })
+    .filter((u) => {
+      if (
+        advanced.followerMin !== null &&
+        u.followerCount < advanced.followerMin
+      )
+        return false;
+      if (
+        advanced.followerMax !== null &&
+        u.followerCount > advanced.followerMax
+      )
+        return false;
+      if (
+        advanced.followingMin !== null &&
+        u.followingCount < advanced.followingMin
+      )
+        return false;
+      if (
+        advanced.followingMax !== null &&
+        u.followingCount > advanced.followingMax
+      )
+        return false;
+      if (advanced.followRatioMin !== null) {
+        const ratio =
+          u.followerCount > 0 ? u.followingCount / u.followerCount : Infinity;
+        if (ratio < advanced.followRatioMin) return false;
+      }
+      if (advanced.verifiedOnly && !u.isVerified) return false;
+      if (advanced.lowEngagement) {
+        const isLow =
+          u.followerCount < 50 &&
+          (u.daysSinceLastTweet === null || u.daysSinceLastTweet > 90);
+        if (!isLow) return false;
+      }
+      return true;
     })
     .sort((a, b) => {
       let cmp = 0;
@@ -248,6 +335,179 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
           </button>
         ))}
       </div>
+
+      {/* Advanced Filters Toggle */}
+      <button
+        onClick={() => setShowAdvanced(!showAdvanced)}
+        className="flex items-center gap-1 text-xs text-x-text-secondary hover:text-x-text"
+      >
+        <span>{showAdvanced ? "▾" : "▸"}</span>
+        Filters
+        {(advanced.followerMin !== null ||
+          advanced.followerMax !== null ||
+          advanced.followingMin !== null ||
+          advanced.followingMax !== null ||
+          advanced.followRatioMin !== null ||
+          advanced.verifiedOnly ||
+          advanced.lowEngagement) && (
+          <span className="w-1.5 h-1.5 rounded-full bg-x-accent" />
+        )}
+      </button>
+
+      {showAdvanced && (
+        <div className="bg-x-card rounded-xl p-3 space-y-3">
+          {/* Follower count presets */}
+          <div>
+            <div className="text-[10px] text-x-text-secondary mb-1">
+              Followers
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {(
+                [
+                  ["<100", 0, 99],
+                  ["100-1K", 100, 999],
+                  ["1K-10K", 1000, 9999],
+                  ["10K-100K", 10000, 99999],
+                  ["100K+", 100000, null],
+                ] as [string, number | null, number | null][]
+              ).map(([label, min, max]) => {
+                const active =
+                  advanced.followerMin === min && advanced.followerMax === max;
+                return (
+                  <button
+                    key={label}
+                    onClick={() =>
+                      setAdvanced((prev) =>
+                        active
+                          ? { ...prev, followerMin: null, followerMax: null }
+                          : { ...prev, followerMin: min, followerMax: max },
+                      )
+                    }
+                    className={`px-2 py-0.5 rounded-full text-[10px] ${
+                      active
+                        ? "bg-x-accent text-white"
+                        : "bg-x-border text-x-text-secondary hover:text-x-text"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Following count presets */}
+          <div>
+            <div className="text-[10px] text-x-text-secondary mb-1">
+              Following
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {(
+                [
+                  ["<100", 0, 99],
+                  ["100-1K", 100, 999],
+                  ["1K+", 1000, null],
+                ] as [string, number | null, number | null][]
+              ).map(([label, min, max]) => {
+                const active =
+                  advanced.followingMin === min &&
+                  advanced.followingMax === max;
+                return (
+                  <button
+                    key={label}
+                    onClick={() =>
+                      setAdvanced((prev) =>
+                        active
+                          ? { ...prev, followingMin: null, followingMax: null }
+                          : { ...prev, followingMin: min, followingMax: max },
+                      )
+                    }
+                    className={`px-2 py-0.5 rounded-full text-[10px] ${
+                      active
+                        ? "bg-x-accent text-white"
+                        : "bg-x-border text-x-text-secondary hover:text-x-text"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Relationship filters */}
+          <div>
+            <div className="text-[10px] text-x-text-secondary mb-1">
+              Relationship
+            </div>
+            <div className="flex flex-wrap gap-1">
+              <button
+                onClick={() =>
+                  setAdvanced((prev) => ({
+                    ...prev,
+                    followRatioMin: prev.followRatioMin === 2 ? null : 2,
+                  }))
+                }
+                className={`px-2 py-0.5 rounded-full text-[10px] ${
+                  advanced.followRatioMin === 2
+                    ? "bg-x-accent text-white"
+                    : "bg-x-border text-x-text-secondary hover:text-x-text"
+                }`}
+              >
+                Follow ratio &gt;2x
+              </button>
+              <button
+                onClick={() =>
+                  setAdvanced((prev) => ({
+                    ...prev,
+                    lowEngagement: !prev.lowEngagement,
+                  }))
+                }
+                className={`px-2 py-0.5 rounded-full text-[10px] ${
+                  advanced.lowEngagement
+                    ? "bg-x-accent text-white"
+                    : "bg-x-border text-x-text-secondary hover:text-x-text"
+                }`}
+              >
+                Low engagement
+              </button>
+              <button
+                onClick={() =>
+                  setAdvanced((prev) => ({
+                    ...prev,
+                    verifiedOnly: !prev.verifiedOnly,
+                  }))
+                }
+                className={`px-2 py-0.5 rounded-full text-[10px] ${
+                  advanced.verifiedOnly
+                    ? "bg-x-accent text-white"
+                    : "bg-x-border text-x-text-secondary hover:text-x-text"
+                }`}
+              >
+                Verified only
+              </button>
+            </div>
+          </div>
+
+          {/* Clear all */}
+          <button
+            onClick={() =>
+              setAdvanced({
+                followerMin: null,
+                followerMax: null,
+                followingMin: null,
+                followingMax: null,
+                followRatioMin: null,
+                verifiedOnly: false,
+                lowEngagement: false,
+              })
+            }
+            className="text-[10px] text-x-text-secondary hover:text-x-text"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
 
       {/* Sort */}
       <div className="flex items-center gap-2 text-xs text-x-text-secondary">
@@ -360,7 +620,12 @@ function UserRow({
               mutual
             </span>
           )}
-          {user.isVerified && <span className="text-[10px]">✓</span>}
+          {user.isBlueVerified && (
+            <span className="text-[10px] text-blue-400">✓</span>
+          )}
+          {user.isVerified && !user.isBlueVerified && (
+            <span className="text-[10px]">✓</span>
+          )}
           {isProtected && (
             <span className="text-[10px] bg-x-green/20 text-x-green px-1 rounded">
               protected
@@ -378,7 +643,33 @@ function UserRow({
           </a>
           {" · "}
           {user.followerCount.toLocaleString()} followers
+          {user.createdAt &&
+            (() => {
+              const days = Math.floor(
+                (Date.now() - new Date(user.createdAt).getTime()) / 86400000,
+              );
+              const years = Math.floor(days / 365);
+              return years > 0 ? ` · ${years}y` : ` · ${days}d`;
+            })()}
         </div>
+        {(user.location || user.url) && (
+          <div className="text-xs text-x-text-secondary mt-0.5 line-clamp-1">
+            {user.location}
+            {user.location && user.url && " · "}
+            {user.url && (
+              <a
+                href={user.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-x-accent hover:underline"
+              >
+                {user.url
+                  .replace(/^https?:\/\/(www\.)?/, "")
+                  .replace(/\/$/, "")}
+              </a>
+            )}
+          </div>
+        )}
         {user.bio && (
           <div className="text-xs text-x-text-secondary mt-0.5 line-clamp-1">
             {user.bio}
@@ -392,11 +683,9 @@ function UserRow({
           >
             {user.status}
           </span>
-          {user.daysSinceLastTweet !== null && (
-            <span className="text-[10px] text-x-text-secondary">
-              {user.daysSinceLastTweet}d ago
-            </span>
-          )}
+          <span className="text-[10px] text-x-text-secondary">
+            {formatTimeAgo(user.daysSinceLastTweet)}
+          </span>
         </div>
         {/* Protect button */}
         {!isProtected && (
