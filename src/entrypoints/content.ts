@@ -7,7 +7,6 @@
 import { extractBearerToken, isAuthenticated } from "../core/auth";
 import { fullScan, stopScan } from "../core/scanner";
 import { bulkUnfollow, stopUnfollow } from "../core/unfollower";
-import { upsertUsers } from "../storage/db";
 import type { MessageType, ScanProgress } from "../core/types";
 
 export default defineContentScript({
@@ -58,19 +57,19 @@ async function handleMessage(
             sendMessage({ type: "SCAN_PROGRESS", data: progress });
           },
           async (batch) => {
-            await upsertUsers(batch);
+            // Send batch to background for DB storage (extension-origin IndexedDB)
+            await chrome.runtime.sendMessage({
+              type: "STORE_USERS_BATCH",
+              users: batch,
+            });
           },
         );
 
-        // Save all users to DB (final state with relationships)
-        await upsertUsers(result.users);
-
-        // Store follower IDs for relationship computation
-        await chrome.storage.local.set({
-          xsweep_follower_ids: result.followerIds,
-          xsweep_following_count: result.followingIds.length,
-          xsweep_follower_count: result.followerIds.length,
-          xsweep_last_scan: new Date().toISOString(),
+        // Send final data to background for relationship update + storage
+        await chrome.runtime.sendMessage({
+          type: "FINALIZE_SCAN",
+          followerIds: result.followerIds,
+          followingIds: result.followingIds,
         });
 
         sendMessage({

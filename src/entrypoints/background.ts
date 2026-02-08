@@ -4,7 +4,12 @@
  */
 
 import { categorizeWithAI } from "../core/categorizer";
-import { getAllUsers, getAllLists, updateUserListIds } from "../storage/db";
+import {
+  getAllUsers,
+  getAllLists,
+  updateUserListIds,
+  upsertUsers,
+} from "../storage/db";
 import type { MessageType } from "../core/types";
 
 export default defineBackground(() => {
@@ -30,6 +35,20 @@ export default defineBackground(() => {
           },
         );
         sendResponse({ success: true });
+        return true;
+      }
+
+      if (message.type === "STORE_USERS_BATCH") {
+        upsertUsers(message.users)
+          .then(() => sendResponse({ success: true }))
+          .catch((e) => sendResponse({ success: false, error: e.message }));
+        return true;
+      }
+
+      if (message.type === "FINALIZE_SCAN") {
+        handleFinalizeScan(message.followerIds, message.followingIds)
+          .then(() => sendResponse({ success: true }))
+          .catch((e) => sendResponse({ success: false, error: e.message }));
         return true;
       }
 
@@ -69,6 +88,28 @@ export default defineBackground(() => {
     }
   });
 });
+
+async function handleFinalizeScan(
+  followerIds: string[],
+  followingIds: string[],
+): Promise<void> {
+  // Store counts in chrome.storage.local
+  await chrome.storage.local.set({
+    xsweep_follower_ids: followerIds,
+    xsweep_following_count: followingIds.length,
+    xsweep_follower_count: followerIds.length,
+    xsweep_last_scan: new Date().toISOString(),
+  });
+
+  // Update relationship fields on all stored users
+  const followerSet = new Set(followerIds.map(String));
+  const users = await getAllUsers();
+  for (const user of users) {
+    user.isFollower = followerSet.has(user.userId);
+    user.isMutual = followerSet.has(user.userId);
+  }
+  await upsertUsers(users);
+}
 
 async function handleAICategorization(
   listId: number,

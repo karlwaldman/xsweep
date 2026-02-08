@@ -107,4 +107,10 @@ export type MessageType =
   | { type: "CATEGORIZE_AI_COMPLETE"; listId: number }
   | { type: "AUTH_STATUS"; authenticated: boolean }
   | { type: "GET_AUTH_STATUS" }
-  | { type: "OPEN_SIDEPANEL" };
+  | { type: "OPEN_SIDEPANEL" }
+  | { type: "STORE_USERS_BATCH"; users: UserProfile[] }
+  | {
+      type: "FINALIZE_SCAN";
+      followerIds: string[];
+      followingIds: string[];
+    };
