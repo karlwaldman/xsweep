@@ -1,0 +1,70 @@
+/**
+ * Export utilities for CSV/JSON download.
+ */
+
+import type { UserProfile } from "../core/types";
+
+function downloadFile(
+  content: string,
+  filename: string,
+  mimeType: string,
+): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function exportUsersCSV(users: UserProfile[], filename?: string): void {
+  const headers = [
+    "username",
+    "display_name",
+    "user_id",
+    "follower_count",
+    "following_count",
+    "tweet_count",
+    "last_tweet_date",
+    "days_inactive",
+    "status",
+    "is_mutual",
+    "verified",
+    "bio",
+  ];
+
+  const rows = users.map((u) => {
+    const days = u.daysSinceLastTweet ?? "N/A";
+    return [
+      u.username,
+      `"${(u.displayName || "").replace(/"/g, '""')}"`,
+      u.userId,
+      u.followerCount,
+      u.followingCount,
+      u.tweetCount,
+      u.lastTweetDate ? u.lastTweetDate.split("T")[0] : "N/A",
+      days,
+      u.status,
+      u.isMutual ? "yes" : "no",
+      u.isVerified ? "yes" : "no",
+      `"${(u.bio || "").replace(/"/g, '""').replace(/\n/g, " ")}"`,
+    ].join(",");
+  });
+
+  const csv = [headers.join(","), ...rows].join("\n");
+  const date = new Date().toISOString().split("T")[0];
+  downloadFile(csv, filename || `xsweep_export_${date}.csv`, "text/csv");
+}
+
+export function exportUsersJSON(users: UserProfile[], filename?: string): void {
+  const json = JSON.stringify(users, null, 2);
+  const date = new Date().toISOString().split("T")[0];
+  downloadFile(
+    json,
+    filename || `xsweep_export_${date}.json`,
+    "application/json",
+  );
+}
