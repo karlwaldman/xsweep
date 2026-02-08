@@ -173,10 +173,10 @@ export default function App() {
                 </span>
                 <button
                   onClick={() => setUnfollowProgress(null)}
-                  className="text-x-text-secondary hover:text-x-text text-xs leading-none"
-                  title="Dismiss"
+                  className="text-x-text-secondary hover:text-x-text text-[10px]"
+                  title="Hide banner (unfollow continues in background)"
                 >
-                  &times;
+                  Hide
                 </button>
               </div>
             </div>

@@ -487,3 +487,233 @@ describe("stopScan", () => {
     expect(() => stopScan()).not.toThrow();
   });
 });
+
+describe("safeParseJson (via collectIds)", () => {
+  beforeEach(() => {
+    vi.mocked(getHeaders).mockReturnValue({
+      authorization: "Bearer mock-token",
+      "x-csrf-token": "mock-csrf",
+      "x-twitter-auth-type": "OAuth2Session",
+      "x-twitter-active-user": "yes",
+    });
+    vi.mocked(getMyUserId).mockReturnValue("12345");
+    vi.mocked(delay).mockResolvedValue(undefined);
+  });
+
+  it("throws descriptive error on invalid JSON response", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve("{invalid json!!!"),
+    } as Response);
+
+    await expect(collectIds("friends/ids.json")).rejects.toThrow(
+      "returned invalid JSON",
+    );
+  });
+
+  it("stops gracefully on empty response body", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(""),
+    } as Response);
+
+    const ids = await collectIds("friends/ids.json");
+    expect(ids).toEqual([]);
+  });
+});
+
+describe("fullScan follower-only filtering", () => {
+  beforeEach(() => {
+    vi.mocked(getHeaders).mockReturnValue({
+      authorization: "Bearer mock-token",
+      "x-csrf-token": "mock-csrf",
+      "x-twitter-auth-type": "OAuth2Session",
+      "x-twitter-active-user": "yes",
+    });
+    vi.mocked(getMyUserId).mockReturnValue("12345");
+    vi.mocked(delay).mockResolvedValue(undefined);
+  });
+
+  it("filters follower-only users and does not duplicate mutuals", async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn(() => {
+      callCount++;
+      // Call 1: friends/ids — following [1, 2]
+      if (callCount === 1) {
+        return Promise.resolve(
+          mockResponse({ ids: ["1", "2"], next_cursor_str: "0" }),
+        );
+      }
+      // Call 2: followers/ids — followers [1, 3] (1 is mutual, 3 is follower-only)
+      if (callCount === 2) {
+        return Promise.resolve(
+          mockResponse({ ids: ["1", "3"], next_cursor_str: "0" }),
+        );
+      }
+      // Call 3: friends/list — hydrate following
+      if (callCount === 3) {
+        return Promise.resolve(
+          mockResponse({
+            users: [
+              {
+                id_str: "1",
+                screen_name: "mutual",
+                name: "Mutual",
+                description: "",
+                followers_count: 100,
+                friends_count: 50,
+                statuses_count: 10,
+                status: { created_at: new Date().toUTCString() },
+              },
+              {
+                id_str: "2",
+                screen_name: "following_only",
+                name: "Following Only",
+                description: "",
+                followers_count: 50,
+                friends_count: 25,
+                statuses_count: 5,
+                status: { created_at: new Date().toUTCString() },
+              },
+            ],
+            next_cursor_str: "0",
+          }),
+        );
+      }
+      // Call 4: followers/list — returns ALL followers (1 + 3), but only 3 should be kept
+      return Promise.resolve(
+        mockResponse({
+          users: [
+            {
+              id_str: "1",
+              screen_name: "mutual",
+              name: "Mutual",
+              description: "",
+              followers_count: 100,
+              friends_count: 50,
+              statuses_count: 10,
+              status: { created_at: new Date().toUTCString() },
+            },
+            {
+              id_str: "3",
+              screen_name: "follower_only",
+              name: "Follower Only",
+              description: "",
+              followers_count: 200,
+              friends_count: 75,
+              statuses_count: 20,
+              status: { created_at: new Date().toUTCString() },
+            },
+          ],
+          next_cursor_str: "0",
+        }),
+      );
+    });
+
+    const result = await fullScan();
+
+    // Should have 3 unique users, not 4 (mutual should NOT be duplicated)
+    expect(result.users).toHaveLength(3);
+
+    const mutual = result.users.find((u) => u.userId === "1")!;
+    const followingOnly = result.users.find((u) => u.userId === "2")!;
+    const followerOnly = result.users.find((u) => u.userId === "3")!;
+
+    // Mutual: following + follower + mutual
+    expect(mutual.isFollowing).toBe(true);
+    expect(mutual.isFollower).toBe(true);
+    expect(mutual.isMutual).toBe(true);
+
+    // Following-only: following but not follower
+    expect(followingOnly.isFollowing).toBe(true);
+    expect(followingOnly.isFollower).toBe(false);
+    expect(followingOnly.isMutual).toBe(false);
+
+    // Follower-only: follower but not following
+    expect(followerOnly.isFollowing).toBe(false);
+    expect(followerOnly.isFollower).toBe(true);
+    expect(followerOnly.isMutual).toBe(false);
+  });
+
+  it("onBatch only receives follower-only users in step 3.5", async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve(
+          mockResponse({ ids: ["1"], next_cursor_str: "0" }),
+        );
+      }
+      if (callCount === 2) {
+        return Promise.resolve(
+          mockResponse({ ids: ["1", "3"], next_cursor_str: "0" }),
+        );
+      }
+      if (callCount === 3) {
+        return Promise.resolve(
+          mockResponse({
+            users: [
+              {
+                id_str: "1",
+                screen_name: "mutual",
+                name: "Mutual",
+                description: "",
+                followers_count: 0,
+                friends_count: 0,
+                statuses_count: 10,
+                status: { created_at: new Date().toUTCString() },
+              },
+            ],
+            next_cursor_str: "0",
+          }),
+        );
+      }
+      // followers/list returns both mutual (1) and follower-only (3)
+      return Promise.resolve(
+        mockResponse({
+          users: [
+            {
+              id_str: "1",
+              screen_name: "mutual",
+              name: "Mutual",
+              description: "",
+              followers_count: 0,
+              friends_count: 0,
+              statuses_count: 10,
+              status: { created_at: new Date().toUTCString() },
+            },
+            {
+              id_str: "3",
+              screen_name: "follower_only",
+              name: "Follower Only",
+              description: "",
+              followers_count: 0,
+              friends_count: 0,
+              statuses_count: 10,
+              status: { created_at: new Date().toUTCString() },
+            },
+          ],
+          next_cursor_str: "0",
+        }),
+      );
+    });
+
+    const batchedUserIds: string[] = [];
+    const onBatch = vi.fn(async (users) => {
+      for (const u of users) batchedUserIds.push(u.userId);
+    });
+
+    await fullScan(undefined, onBatch);
+
+    // User "1" should appear in batches from step 3 (following)
+    // User "3" should appear in batches from step 3.5 (follower-only)
+    // User "1" should NOT appear again from step 3.5 (filtered out)
+    const countUser1 = batchedUserIds.filter((id) => id === "1").length;
+    const countUser3 = batchedUserIds.filter((id) => id === "3").length;
+
+    expect(countUser1).toBe(1); // Only from step 3, NOT duplicated from step 3.5
+    expect(countUser3).toBe(1); // From step 3.5
+  });
+});

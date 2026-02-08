@@ -7,6 +7,24 @@ import { getHeaders, getMyUserId } from "./auth";
 import { delay } from "../utils/rate-limiter";
 import type { UserProfile, UserStatus, ScanProgress } from "./types";
 
+/**
+ * Safely parse JSON from a fetch response body.
+ * Returns null for empty bodies (signals end-of-pagination).
+ * Throws with context on invalid JSON.
+ */
+function safeParseJson<T>(text: string, context: string): T | null {
+  if (!text) {
+    console.log(`[XSweep] ${context}: empty response body, stopping.`);
+    return null;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    console.error(`[XSweep] ${context}: invalid JSON:`, text.slice(0, 200));
+    throw new Error(`${context}: returned invalid JSON`);
+  }
+}
+
 export interface VerifiedFollowerResult {
   verified: number;
   total: number;
@@ -97,18 +115,11 @@ export async function collectIds(
       throw new Error(`${endpoint} error: ${resp.status}`);
     }
 
-    const text = await resp.text();
-    if (!text) {
-      console.log("[XSweep] collectIds: empty response body, stopping.");
-      break;
-    }
-    let data: { ids?: string[]; next_cursor_str?: string };
-    try {
-      data = JSON.parse(text);
-    } catch {
-      console.error("[XSweep] collectIds: invalid JSON:", text.slice(0, 200));
-      throw new Error(`${endpoint} returned invalid JSON`);
-    }
+    const data = safeParseJson<{ ids?: string[]; next_cursor_str?: string }>(
+      await resp.text(),
+      `collectIds(${endpoint})`,
+    );
+    if (!data) break;
     const ids: string[] = data.ids || [];
     allIds.push(...ids);
     page++;
@@ -202,21 +213,11 @@ export async function hydrateUsers(
       throw new Error(`${endpoint} error: ${resp.status}`);
     }
 
-    const text = await resp.text();
-    if (!text) {
-      console.log("[XSweep] hydrateUsers: empty response body, stopping.");
-      break;
-    }
-    let data: {
+    const data = safeParseJson<{
       users?: Array<Record<string, unknown>>;
       next_cursor_str?: string;
-    };
-    try {
-      data = JSON.parse(text);
-    } catch {
-      console.error("[XSweep] hydrateUsers: invalid JSON:", text.slice(0, 200));
-      throw new Error(`${endpoint} returned invalid JSON`);
-    }
+    }>(await resp.text(), `hydrateUsers(${endpoint})`);
+    if (!data) break;
     const users = data.users || [];
 
     if (users.length === 0) {
@@ -436,6 +437,17 @@ export async function fullScan(
       scannedUsers: users.length,
       currentPage: 0,
     });
+    // Wrap onBatch to filter out mutuals BEFORE writing to DB —
+    // followers/list.json returns ALL followers including mutuals
+    const filteredOnBatch = onBatch
+      ? async (batch: UserProfile[]) => {
+          const filtered = batch.filter((u) =>
+            followerOnlyKnownIds.has(u.userId),
+          );
+          if (filtered.length > 0) await onBatch(filtered);
+        }
+      : undefined;
+
     const allFollowerUsers = await hydrateUsers(
       "followers/list.json",
       followerOnlyKnownIds,
@@ -446,10 +458,9 @@ export async function fullScan(
           scannedUsers: users.length + progress.scannedUsers,
         });
       },
-      onBatch,
+      filteredOnBatch,
     );
-    // Filter to ONLY follower-only users — followers/list.json returns ALL
-    // followers including mutuals, which would create duplicates with wrong labels
+    // Filter return value to match — only keep follower-only users
     const followerOnlyUsers = allFollowerUsers.filter((u) =>
       followerOnlyKnownIds.has(u.userId),
     );
@@ -566,23 +577,11 @@ export async function scanVerifiedFollowers(
       throw new Error(`followers/list.json error: ${resp.status}`);
     }
 
-    const text = await resp.text();
-    if (!text) {
-      console.log(
-        "[XSweep] scanVerifiedFollowers: empty response body, stopping.",
-      );
-      break;
-    }
-    let data: { users?: unknown[]; next_cursor_str?: string };
-    try {
-      data = JSON.parse(text);
-    } catch {
-      console.error(
-        "[XSweep] scanVerifiedFollowers: invalid JSON response:",
-        text.slice(0, 200),
-      );
-      throw new Error("followers/list.json returned invalid JSON");
-    }
+    const data = safeParseJson<{ users?: unknown[]; next_cursor_str?: string }>(
+      await resp.text(),
+      "scanVerifiedFollowers",
+    );
+    if (!data) break;
     const users = data.users || [];
 
     if (users.length === 0) break;
@@ -730,22 +729,11 @@ export async function scanOwnTweets(
       throw new Error(`user_timeline.json error: ${resp.status}`);
     }
 
-    const text = await resp.text();
-    if (!text) {
-      console.log("[XSweep] scanOwnTweets: empty response body, stopping.");
-      break;
-    }
-    let tweets: Array<Record<string, unknown>>;
-    try {
-      tweets = JSON.parse(text);
-    } catch {
-      console.error(
-        "[XSweep] scanOwnTweets: invalid JSON response:",
-        text.slice(0, 200),
-      );
-      throw new Error("user_timeline.json returned invalid JSON");
-    }
-    if (!Array.isArray(tweets) || tweets.length === 0) break;
+    const tweets = safeParseJson<Array<Record<string, unknown>>>(
+      await resp.text(),
+      "scanOwnTweets",
+    );
+    if (!tweets || !Array.isArray(tweets) || tweets.length === 0) break;
 
     let reachedOldTweets = false;
 
