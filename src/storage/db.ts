@@ -25,6 +25,12 @@ class XSweepDB extends Dexie {
       lists: "++id, name, type",
       unfollowLog: "++id, userId, date",
     });
+    this.version(2).stores({
+      users: "userId, username, status, *listIds, scannedAt",
+      snapshots: "++id, date",
+      lists: "++id, name, type, xListId",
+      unfollowLog: "++id, userId, date",
+    });
   }
 }
 
@@ -98,6 +104,12 @@ export async function deleteList(id: number): Promise<void> {
 
 export async function getListCount(): Promise<number> {
   return db.lists.count();
+}
+
+export async function getListByXListId(
+  xListId: string,
+): Promise<SmartList | undefined> {
+  return db.lists.where("xListId").equals(xListId).first();
 }
 
 // ---- Snapshot operations ----

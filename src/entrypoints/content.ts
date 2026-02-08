@@ -7,6 +7,12 @@
 import { extractBearerToken, isAuthenticated } from "../core/auth";
 import { fullScan, stopScan } from "../core/scanner";
 import { bulkUnfollow, stopUnfollow } from "../core/unfollower";
+import {
+  fetchMyLists,
+  fetchListMembers,
+  createXList,
+  addListMember,
+} from "../core/lists-api";
 import type { MessageType, ScanProgress } from "../core/types";
 
 export default defineContentScript({
@@ -126,6 +132,58 @@ async function handleMessage(
     case "STOP_UNFOLLOW": {
       stopUnfollow();
       sendResponse({ success: true });
+      break;
+    }
+
+    case "FETCH_X_LISTS": {
+      try {
+        await extractBearerToken();
+        const lists = await fetchMyLists();
+        sendResponse({ success: true, lists });
+      } catch (e) {
+        const error = e instanceof Error ? e.message : "Unknown error";
+        sendResponse({ success: false, error });
+      }
+      break;
+    }
+
+    case "FETCH_X_LIST_MEMBERS": {
+      try {
+        await extractBearerToken();
+        const members = await fetchListMembers(message.listId);
+        sendResponse({ success: true, members });
+      } catch (e) {
+        const error = e instanceof Error ? e.message : "Unknown error";
+        sendResponse({ success: false, error });
+      }
+      break;
+    }
+
+    case "CREATE_X_LIST": {
+      try {
+        await extractBearerToken();
+        const list = await createXList(
+          message.name,
+          message.description,
+          message.mode,
+        );
+        sendResponse({ success: true, list });
+      } catch (e) {
+        const error = e instanceof Error ? e.message : "Unknown error";
+        sendResponse({ success: false, error });
+      }
+      break;
+    }
+
+    case "ADD_X_LIST_MEMBER": {
+      try {
+        await extractBearerToken();
+        await addListMember(message.listId, message.userId);
+        sendResponse({ success: true });
+      } catch (e) {
+        const error = e instanceof Error ? e.message : "Unknown error";
+        sendResponse({ success: false, error });
+      }
       break;
     }
   }

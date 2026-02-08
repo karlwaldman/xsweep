@@ -28,11 +28,12 @@ export type UserStatus =
 export interface SmartList {
   id?: number;
   name: string;
-  type: "keyword" | "ai";
+  type: "keyword" | "ai" | "imported";
   keywords: string[];
   description: string;
   createdAt: string;
   updatedAt: string;
+  xListId?: string; // linked X/Twitter list ID
 }
 
 export interface Snapshot {
@@ -114,4 +115,13 @@ export type MessageType =
       type: "FINALIZE_SCAN";
       followerIds: string[];
       followingIds: string[];
-    };
+    }
+  | { type: "FETCH_X_LISTS" }
+  | { type: "FETCH_X_LIST_MEMBERS"; listId: string }
+  | {
+      type: "CREATE_X_LIST";
+      name: string;
+      description: string;
+      mode: "public" | "private";
+    }
+  | { type: "ADD_X_LIST_MEMBER"; listId: string; userId: string };
