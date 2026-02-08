@@ -41,13 +41,31 @@ XSweep is designed to be privacy-first:
 
 ## Install
 
-### From Chrome Web Store
+### Chrome Web Store
 
-_Coming soon_
+_Coming soon._ For now, install from source — it takes about 2 minutes.
 
-### From Source
+### Quick Start (from source)
 
-Requires [Node.js 22+](https://nodejs.org/) and [bun](https://bun.sh/).
+You need **Chrome** and a **terminal** (Terminal on Mac, PowerShell on Windows, any terminal on Linux).
+
+**Step 1 — Install Node.js 22**
+
+If you don't have Node.js, grab it from [nodejs.org](https://nodejs.org/) (LTS is fine as long as it's v22+). Verify with:
+
+```bash
+node -v   # Should print v22.x.x or higher
+```
+
+**Step 2 — Install bun**
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+Then restart your terminal so `bun` is on your PATH.
+
+**Step 3 — Clone and build**
 
 ```bash
 git clone https://github.com/karlwaldman/xsweep.git
@@ -56,12 +74,22 @@ bun install
 bun run build
 ```
 
-Then load the extension in Chrome:
+> If you use [nvm](https://github.com/nvm-sh/nvm), the repo includes an `.nvmrc` — just run `nvm use` before `bun install`.
 
-1. Open `chrome://extensions`
-2. Enable **Developer mode** (top right)
-3. Click **Load unpacked**
-4. Select the `.output/chrome-mv3` directory
+**Step 4 — Load into Chrome**
+
+1. Open Chrome and go to `chrome://extensions`
+2. Flip the **Developer mode** toggle in the top-right corner
+3. Click the **Load unpacked** button (top left)
+4. Navigate to the `xsweep` folder you cloned, then select the `.output/chrome-mv3` subfolder
+5. You should see "XSweep" appear in your extensions list
+
+**Step 5 — First use**
+
+1. Go to [x.com](https://x.com) and make sure you're logged in
+2. Click the XSweep icon in your Chrome toolbar (puzzle piece icon → pin XSweep if you don't see it)
+3. The side panel opens — hit **Scan** to import your following list
+4. That's it — explore the Dashboard, Audit, Lists, and more
 
 ### Development
 
