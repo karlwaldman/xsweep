@@ -436,7 +436,7 @@ export async function fullScan(
       scannedUsers: users.length,
       currentPage: 0,
     });
-    const followerOnlyUsers = await hydrateUsers(
+    const allFollowerUsers = await hydrateUsers(
       "followers/list.json",
       followerOnlyKnownIds,
       (progress) => {
@@ -447,6 +447,11 @@ export async function fullScan(
         });
       },
       onBatch,
+    );
+    // Filter to ONLY follower-only users — followers/list.json returns ALL
+    // followers including mutuals, which would create duplicates with wrong labels
+    const followerOnlyUsers = allFollowerUsers.filter((u) =>
+      followerOnlyKnownIds.has(u.userId),
     );
     // Mark as follower-only
     for (const user of followerOnlyUsers) {

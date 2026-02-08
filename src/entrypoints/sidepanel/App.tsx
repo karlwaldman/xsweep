@@ -167,9 +167,18 @@ export default function App() {
                   ? "Starting cleanup..."
                   : `Unfollowing ${unfollowProgress.done} of ${unfollowProgress.total}`}
               </span>
-              <span className="text-[10px] text-x-text-secondary">
-                {unfollowProgress.total - unfollowProgress.done} left
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-x-text-secondary">
+                  {unfollowProgress.total - unfollowProgress.done} left
+                </span>
+                <button
+                  onClick={() => setUnfollowProgress(null)}
+                  className="text-x-text-secondary hover:text-x-text text-xs leading-none"
+                  title="Dismiss"
+                >
+                  &times;
+                </button>
+              </div>
             </div>
             <div className="w-full bg-x-border rounded-full h-1.5">
               <div
