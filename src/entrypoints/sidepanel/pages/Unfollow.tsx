@@ -88,6 +88,16 @@ export default function Unfollow() {
   async function handleUnfollow() {
     if (selected.size === 0) return;
 
+    // Verify active tab is x.com before proceeding
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (!tab?.url?.includes("x.com")) {
+      alert("Navigate to x.com first, then try again.");
+      return;
+    }
+
     setUnfollowing(true);
 
     // Export backup first
@@ -95,10 +105,6 @@ export default function Unfollow() {
     exportUsersCSV(toUnfollow, `xsweep_backup_before_unfollow.csv`);
 
     // Send unfollow command to content script
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
     if (tab?.id) {
       chrome.tabs.sendMessage(tab.id, {
         type: "START_UNFOLLOW",

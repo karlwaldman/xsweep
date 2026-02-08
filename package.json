@@ -11,7 +11,10 @@
     "build:firefox": "wxt build --browser firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip --browser firefox",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "dexie": "^4.0.11",

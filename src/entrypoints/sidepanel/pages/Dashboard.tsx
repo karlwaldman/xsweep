@@ -12,6 +12,7 @@ import type {
   AuditCounts,
   AccountHealth,
   SmartList,
+  ScanProgress,
 } from "../../../core/types";
 
 interface ListWithCount extends SmartList {
@@ -25,16 +26,30 @@ export default function Dashboard() {
   const [followerCount, setFollowerCount] = useState(0);
   const [lastScan, setLastScan] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
-    const listener = (message: { type: string }) => {
+    const listener = (message: {
+      type: string;
+      data?: ScanProgress;
+      error?: string;
+    }) => {
       if (message.type === "SCAN_COMPLETE") {
         setScanning(false);
+        setScanProgress(null);
         loadData();
       }
-      if (message.type === "SCAN_PROGRESS") {
+      if (message.type === "SCAN_PROGRESS" && message.data) {
         setScanning(true);
+        setScanProgress(message.data);
+        setScanError(null);
+      }
+      if (message.type === "SCAN_ERROR") {
+        setScanning(false);
+        setScanProgress(null);
+        setScanError(message.error || "Scan failed");
       }
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -78,11 +93,16 @@ export default function Dashboard() {
   }
 
   async function startScan() {
-    setScanning(true);
     const [tab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
     });
+    if (!tab?.url?.includes("x.com")) {
+      setScanError("Navigate to x.com first, then start the scan.");
+      return;
+    }
+    setScanError(null);
+    setScanning(true);
     if (tab?.id) {
       chrome.tabs.sendMessage(tab.id, { type: "START_SCAN" });
     }
@@ -100,13 +120,22 @@ export default function Dashboard() {
         <p className="text-x-text-secondary text-center text-xs">
           Make sure you're on x.com before scanning.
         </p>
-        <button
-          onClick={startScan}
-          disabled={scanning}
-          className="px-6 py-2.5 bg-x-accent text-white rounded-full font-semibold hover:bg-x-accent-hover disabled:opacity-50 transition-colors"
-        >
-          {scanning ? "Scanning..." : "Scan My Following"}
-        </button>
+
+        {scanning && scanProgress ? (
+          <ScanProgressBar progress={scanProgress} />
+        ) : (
+          <button
+            onClick={startScan}
+            disabled={scanning}
+            className="px-6 py-2.5 bg-x-accent text-white rounded-full font-semibold hover:bg-x-accent-hover disabled:opacity-50 transition-colors"
+          >
+            Scan My Following
+          </button>
+        )}
+
+        {scanError && (
+          <p className="text-x-red text-sm text-center">{scanError}</p>
+        )}
       </div>
     );
   }
@@ -200,21 +229,88 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Actions */}
-      <div className="flex gap-3">
-        <button
-          onClick={startScan}
-          disabled={scanning}
-          className="flex-1 px-4 py-2 bg-x-card text-x-text rounded-full text-sm font-medium hover:bg-x-border disabled:opacity-50 transition-colors"
-        >
-          {scanning ? "Scanning..." : "Re-scan"}
-        </button>
-      </div>
+      {/* Scan Progress or Actions */}
+      {scanning && scanProgress ? (
+        <ScanProgressBar progress={scanProgress} />
+      ) : (
+        <div className="flex gap-3">
+          <button
+            onClick={startScan}
+            disabled={scanning}
+            className="flex-1 px-4 py-2 bg-x-card text-x-text rounded-full text-sm font-medium hover:bg-x-border disabled:opacity-50 transition-colors"
+          >
+            Re-scan
+          </button>
+        </div>
+      )}
 
-      {lastScan && (
+      {scanError && (
+        <p className="text-x-red text-sm text-center">{scanError}</p>
+      )}
+
+      {lastScan && !scanning && (
         <p className="text-xs text-x-text-secondary text-center">
           Last scan: {new Date(lastScan).toLocaleDateString()}
         </p>
+      )}
+    </div>
+  );
+}
+
+function ScanProgressBar({ progress }: { progress: ScanProgress }) {
+  const phaseLabels: Record<string, string> = {
+    "collecting-ids": "Collecting account IDs",
+    "scanning-users": "Scanning user profiles",
+    "computing-relationships": "Computing relationships",
+    complete: "Complete",
+    error: "Error",
+  };
+
+  const phaseLabel = phaseLabels[progress.phase] || progress.phase;
+
+  // Calculate percentage based on phase
+  let percent = 0;
+  if (progress.phase === "collecting-ids") {
+    // IDs phase: show indeterminate-ish progress based on page count
+    // Estimate ~2 pages for following + ~1 page for followers
+    percent = Math.min(20, progress.currentPage * 5);
+  } else if (progress.phase === "scanning-users") {
+    // Users phase: 20-90% range
+    const userPercent =
+      progress.totalIds > 0
+        ? (progress.scannedUsers / progress.totalIds) * 100
+        : 0;
+    percent = 20 + userPercent * 0.7;
+  } else if (progress.phase === "computing-relationships") {
+    percent = 95;
+  } else if (progress.phase === "complete") {
+    percent = 100;
+  }
+
+  percent = Math.min(100, Math.round(percent));
+
+  return (
+    <div className="w-full bg-x-card rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium">{phaseLabel}</span>
+        <span className="text-sm text-x-text-secondary">{percent}%</span>
+      </div>
+      <div className="w-full bg-x-border rounded-full h-2">
+        <div
+          className="h-2 rounded-full bg-x-accent transition-all duration-500"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      {progress.phase === "scanning-users" && progress.totalIds > 0 && (
+        <div className="text-xs text-x-text-secondary text-center">
+          {progress.scannedUsers.toLocaleString()} /{" "}
+          {progress.totalIds.toLocaleString()} profiles scanned
+        </div>
+      )}
+      {progress.phase === "collecting-ids" && progress.totalIds > 0 && (
+        <div className="text-xs text-x-text-secondary text-center">
+          {progress.totalIds.toLocaleString()} IDs collected
+        </div>
       )}
     </div>
   );

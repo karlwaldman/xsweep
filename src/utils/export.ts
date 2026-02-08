@@ -9,6 +9,15 @@ function downloadFile(
   filename: string,
   mimeType: string,
 ): void {
+  // Chrome extension sidepanels can't trigger downloads via DOM <a> click.
+  // Use chrome.downloads API when available (real extension context).
+  if (typeof chrome !== "undefined" && chrome.downloads?.download) {
+    const dataUrl = `data:${mimeType};charset=utf-8,${encodeURIComponent(content)}`;
+    chrome.downloads.download({ url: dataUrl, filename, saveAs: true });
+    return;
+  }
+
+  // Fallback for non-extension contexts (tests, standalone pages)
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

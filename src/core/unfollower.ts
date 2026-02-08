@@ -101,7 +101,7 @@ export async function bulkUnfollow(
   const batch = users.slice(0, remaining);
 
   for (let i = 0; i < batch.length; i++) {
-    if (abortController.signal.aborted) break;
+    if (!abortController || abortController.signal.aborted) break;
 
     const user = batch[i];
     onProgress?.(i, batch.length, user.username);

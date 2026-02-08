@@ -77,8 +77,13 @@ export default function Lists() {
   }
 
   async function runKeywordCategorization() {
-    setCategorizing(true);
     const users = await getAllUsers();
+    if (users.length === 0) {
+      alert("No scanned users found. Run a scan from the Dashboard first.");
+      return;
+    }
+
+    setCategorizing(true);
     const allLists = await getAllLists();
     const keywordLists = allLists.filter((l) => l.type === "keyword");
 
