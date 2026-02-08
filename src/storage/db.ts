@@ -48,6 +48,10 @@ export async function getUserCount(): Promise<number> {
   return db.users.count();
 }
 
+export async function deleteUser(userId: string): Promise<void> {
+  await db.users.delete(userId);
+}
+
 export async function clearUsers(): Promise<void> {
   await db.users.clear();
 }

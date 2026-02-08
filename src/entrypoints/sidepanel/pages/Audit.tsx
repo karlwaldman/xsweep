@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { getAllUsers } from "../../../storage/db";
+import { useEffect, useState, useRef } from "react";
+import { getAllUsers, deleteUser, logUnfollow } from "../../../storage/db";
 import type { UserProfile, ScanProgress } from "../../../core/types";
 import type { NavigateFn, ShowToastFn } from "../App";
 
@@ -31,9 +31,10 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [page, setPage] = useState(0);
   const [whitelist, setWhitelist] = useState<Set<string>>(new Set());
-  const [unfollowingUser, setUnfollowingUser] = useState<string | null>(null);
-  const [confirmUnfollow, setConfirmUnfollow] = useState<string | null>(null);
-  const [fadingOut, setFadingOut] = useState<Set<string>>(new Set());
+  const [removedUsers, setRemovedUsers] = useState<Set<string>>(new Set());
+  const pendingUnfollows = useRef<
+    Map<string, { timer: ReturnType<typeof setTimeout>; user: UserProfile }>
+  >(new Map());
   const PAGE_SIZE = 50;
 
   useEffect(() => {
@@ -74,49 +75,56 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
     }
   }
 
-  async function handleInlineUnfollow(user: UserProfile) {
-    if (confirmUnfollow !== user.userId) {
-      setConfirmUnfollow(user.userId);
-      return;
-    }
+  function handleInlineUnfollow(user: UserProfile) {
+    // Optimistically remove from view immediately
+    setRemovedUsers((prev) => new Set([...prev, user.userId]));
 
-    // Verified confirm tap — do the unfollow
-    setConfirmUnfollow(null);
-    setUnfollowingUser(user.userId);
+    // Set a 4-second timer before actually executing
+    const timer = setTimeout(async () => {
+      pendingUnfollows.current.delete(user.userId);
 
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-    if (!tab?.url?.includes("x.com") || !tab?.id) {
-      showToast("Navigate to x.com first");
-      setUnfollowingUser(null);
-      return;
-    }
-
-    chrome.tabs.sendMessage(tab.id, {
-      type: "START_UNFOLLOW",
-      userIds: [user.userId],
-      dryRun: false,
-    });
-
-    // Fade out the row
-    setFadingOut((prev) => new Set([...prev, user.userId]));
-    setTimeout(() => {
-      setFadingOut((prev) => {
-        const next = new Set(prev);
-        next.delete(user.userId);
-        return next;
+      // Actually execute the unfollow
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
       });
-      loadUsers();
-    }, 500);
+      if (tab?.url?.includes("x.com") && tab?.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: "START_UNFOLLOW",
+          userIds: [user.userId],
+          dryRun: false,
+        });
+      }
 
-    setUnfollowingUser(null);
+      // Remove from DB and log
+      await deleteUser(user.userId);
+      await logUnfollow({
+        userId: user.userId,
+        username: user.username,
+        date: new Date().toISOString(),
+        reason: user.status,
+      });
+    }, 4000);
+
+    pendingUnfollows.current.set(user.userId, { timer, user });
+
+    // Toast with working undo
     showToast(`Unfollowed @${user.username}`, {
       label: "Undo",
       onClick: () => {
-        // Re-follow not supported via API easily, just reload
-        showToast("Re-follow from their profile on x.com");
+        // Cancel the pending unfollow
+        const pending = pendingUnfollows.current.get(user.userId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingUnfollows.current.delete(user.userId);
+        }
+        // Restore the user in the list
+        setRemovedUsers((prev) => {
+          const next = new Set(prev);
+          next.delete(user.userId);
+          return next;
+        });
+        showToast(`Restored @${user.username}`);
       },
     });
   }
@@ -129,6 +137,7 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
   }
 
   const filtered = users
+    .filter((u) => !removedUsers.has(u.userId))
     .filter((u) => !whitelist.has(u.username.toLowerCase()) || filter === "all")
     .filter((u) => {
       if (filter === "mutual") return u.isMutual;
@@ -277,12 +286,8 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
           <UserRow
             key={user.userId}
             user={user}
-            isFadingOut={fadingOut.has(user.userId)}
-            isConfirming={confirmUnfollow === user.userId}
-            isUnfollowing={unfollowingUser === user.userId}
             isProtected={whitelist.has(user.username.toLowerCase())}
             onUnfollow={() => handleInlineUnfollow(user)}
-            onCancelUnfollow={() => setConfirmUnfollow(null)}
             onProtect={() => handleProtect(user)}
           />
         ))}
@@ -316,21 +321,13 @@ export default function Audit({ initialFilter, navigateTo, showToast }: Props) {
 
 function UserRow({
   user,
-  isFadingOut,
-  isConfirming,
-  isUnfollowing,
   isProtected,
   onUnfollow,
-  onCancelUnfollow,
   onProtect,
 }: {
   user: UserProfile;
-  isFadingOut: boolean;
-  isConfirming: boolean;
-  isUnfollowing: boolean;
   isProtected: boolean;
   onUnfollow: () => void;
-  onCancelUnfollow: () => void;
   onProtect: () => void;
 }) {
   const statusColors: Record<string, string> = {
@@ -343,11 +340,7 @@ function UserRow({
   };
 
   return (
-    <div
-      className={`flex items-start gap-3 p-2 rounded-lg hover:bg-x-card transition-all ${
-        isFadingOut ? "opacity-0 h-0 overflow-hidden" : "opacity-100"
-      }`}
-    >
+    <div className="flex items-start gap-3 p-2 rounded-lg hover:bg-x-card transition-colors">
       {user.profileImageUrl ? (
         <img
           src={user.profileImageUrl}
@@ -427,44 +420,26 @@ function UserRow({
             </svg>
           </button>
         )}
-        {/* Unfollow button */}
-        {isConfirming ? (
-          <div className="flex items-center gap-1">
-            <button
-              onClick={onUnfollow}
-              disabled={isUnfollowing}
-              className="text-[10px] text-x-red font-medium hover:text-red-400 px-1"
-            >
-              {isUnfollowing ? "..." : "Unfollow?"}
-            </button>
-            <button
-              onClick={onCancelUnfollow}
-              className="text-[10px] text-x-text-secondary hover:text-x-text px-1"
-            >
-              ✕
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={onUnfollow}
-            className="p-1 text-x-text-secondary hover:text-x-red transition-colors"
-            title="Unfollow"
+        {/* Unfollow button — single click, undo via toast */}
+        <button
+          onClick={onUnfollow}
+          className="p-1 text-x-text-secondary hover:text-x-red transition-colors"
+          title="Unfollow"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
           >
-            <svg
-              className="w-3.5 h-3.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
-          </button>
-        )}
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M6 18L18 6M6 6l12 12"
+            />
+          </svg>
+        </button>
       </div>
     </div>
   );
