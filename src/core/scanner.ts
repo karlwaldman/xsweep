@@ -10,6 +10,14 @@ import type { UserProfile, UserStatus, ScanProgress } from "./types";
 export interface VerifiedFollowerResult {
   verified: number;
   total: number;
+  topVerifiedFollowers: Array<{
+    userId: string;
+    username: string;
+    displayName: string;
+    followerCount: number;
+    profileImageUrl: string;
+  }>;
+  topLocations: Array<{ location: string; count: number }>;
 }
 
 export interface OwnTweetsResult {
@@ -19,6 +27,15 @@ export interface OwnTweetsResult {
   tweetsLast90: number;
   avgViews: number;
   topViews: number;
+  totalReplies: number;
+  totalRetweets: number;
+  totalLikes: number;
+  mediaTweetCount: number;
+  threadCount: number;
+  threadImpressions: number;
+  singleImpressions: number;
+  hourlyEngagement: Map<number, { total: number; count: number }>;
+  dailyEngagement: Map<number, { total: number; count: number }>;
 }
 
 const INACTIVE_DAYS = 365;
@@ -240,6 +257,7 @@ export async function hydrateUsers(
         lastTweetDate: lastTweet ? lastTweet.toISOString() : null,
         daysSinceLastTweet: daysSince,
         status,
+        isFollowing: true, // default, overridden by caller for follower-only
         isFollower: false, // computed later in relationships
         isMutual: false, // computed later in relationships
         isVerified: u.verified || false,
@@ -285,6 +303,7 @@ export async function hydrateUsers(
         lastTweetDate: null,
         daysSinceLastTweet: null,
         status: "no_tweets",
+        isFollowing: true, // default, overridden by caller for follower-only
         isFollower: false,
         isMutual: false,
         isVerified: false,
@@ -339,7 +358,7 @@ export async function fullScan(
   );
 
   // Step 3: Hydrate following users
-  console.log("[XSweep] Step 3/4: Hydrating user profiles...");
+  console.log("[XSweep] Step 3/5: Hydrating following profiles...");
   onProgress?.({
     phase: "scanning-users",
     totalIds: followingIds.length,
@@ -353,27 +372,75 @@ export async function fullScan(
     onProgress,
     onBatch,
   );
+  // Mark all as following
+  for (const user of users) {
+    user.isFollowing = true;
+  }
   console.log(
-    `[XSweep] Step 3 done: ${users.length} users hydrated (${((Date.now() - startTime) / 1000).toFixed(1)}s)`,
+    `[XSweep] Step 3 done: ${users.length} following profiles hydrated (${((Date.now() - startTime) / 1000).toFixed(1)}s)`,
   );
 
+  // Step 3.5: Hydrate follower-only profiles
+  const followingSet = new Set(followingIds.map(String));
+  const followerOnlyIds = followerIds.filter(
+    (id) => !followingSet.has(String(id)),
+  );
+  if (followerOnlyIds.length > 0) {
+    console.log(
+      `[XSweep] Step 3.5/5: Hydrating ${followerOnlyIds.length} follower-only profiles...`,
+    );
+    const followerOnlyKnownIds = new Set(followerOnlyIds.map(String));
+    onProgress?.({
+      phase: "scanning-users",
+      totalIds: followingIds.length + followerOnlyIds.length,
+      scannedUsers: users.length,
+      currentPage: 0,
+    });
+    const followerOnlyUsers = await hydrateUsers(
+      "followers/list.json",
+      followerOnlyKnownIds,
+      (progress) => {
+        onProgress?.({
+          ...progress,
+          totalIds: followingIds.length + followerOnlyIds.length,
+          scannedUsers: users.length + progress.scannedUsers,
+        });
+      },
+      onBatch,
+    );
+    // Mark as follower-only
+    for (const user of followerOnlyUsers) {
+      user.isFollowing = false;
+      user.isFollower = true;
+      user.isMutual = false;
+    }
+    users.push(...followerOnlyUsers);
+    console.log(
+      `[XSweep] Step 3.5 done: ${followerOnlyUsers.length} follower-only profiles hydrated (${((Date.now() - startTime) / 1000).toFixed(1)}s)`,
+    );
+  }
+
   // Step 4: Compute relationships
-  console.log("[XSweep] Step 4/4: Computing relationships...");
+  console.log("[XSweep] Step 4/5: Computing relationships...");
   onProgress?.({
     phase: "computing-relationships",
-    totalIds: followingIds.length,
+    totalIds: users.length,
     scannedUsers: users.length,
     currentPage: 0,
   });
   const followerSet = new Set(followerIds.map(String));
   for (const user of users) {
-    user.isFollower = followerSet.has(user.userId);
-    user.isMutual = followerSet.has(user.userId);
+    if (user.isFollowing) {
+      // Following user — check if they follow back
+      user.isFollower = followerSet.has(user.userId);
+      user.isMutual = followerSet.has(user.userId);
+    }
+    // Follower-only users already have isFollower=true, isMutual=false from step 3.5
   }
 
   onProgress?.({
     phase: "complete",
-    totalIds: followingIds.length,
+    totalIds: users.length,
     scannedUsers: users.length,
     currentPage: 0,
   });
@@ -407,6 +474,18 @@ export async function scanVerifiedFollowers(
   let consecutiveDupes = 0;
   const MAX_PAGES = 250; // 250 * 200 = 50k max followers
   let page = 0;
+
+  // Track top verified followers (sorted by follower_count, cap at 10)
+  const topVerified: Array<{
+    userId: string;
+    username: string;
+    displayName: string;
+    followerCount: number;
+    profileImageUrl: string;
+  }> = [];
+
+  // Track location distribution
+  const locationCounts = new Map<string, number>();
 
   monetizationAbort = new AbortController();
   console.log("[XSweep] scanVerifiedFollowers: starting");
@@ -457,7 +536,32 @@ export async function scanVerifiedFollowers(
       }
       seen.add(uid);
       total++;
-      if (u.verified || u.is_blue_verified) verified++;
+
+      if (u.verified || u.is_blue_verified) {
+        verified++;
+        // Track top verified followers by follower count
+        const entry = {
+          userId: uid,
+          username: u.screen_name || "[unknown]",
+          displayName: u.name || "[unknown]",
+          followerCount: u.followers_count || 0,
+          profileImageUrl: u.profile_image_url_https || "",
+        };
+        topVerified.push(entry);
+        // Keep sorted descending, cap at 10
+        topVerified.sort((a, b) => b.followerCount - a.followerCount);
+        if (topVerified.length > 10) topVerified.length = 10;
+      }
+
+      // Track location distribution
+      const loc = (u.location || "").trim();
+      if (loc) {
+        const normalized = loc.toLowerCase();
+        locationCounts.set(
+          normalized,
+          (locationCounts.get(normalized) ?? 0) + 1,
+        );
+      }
     }
 
     if (dupeCount === users.length) {
@@ -484,10 +588,16 @@ export async function scanVerifiedFollowers(
     await delay(3, 5);
   }
 
+  // Build top locations list (sorted by count, top 10)
+  const topLocations = Array.from(locationCounts.entries())
+    .map(([location, count]) => ({ location, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
   console.log(
-    `[XSweep] scanVerifiedFollowers: done. ${verified} verified / ${total} total`,
+    `[XSweep] scanVerifiedFollowers: done. ${verified} verified / ${total} total, ${topVerified.length} top verified, ${topLocations.length} locations`,
   );
-  return { verified, total };
+  return { verified, total, topVerifiedFollowers: topVerified, topLocations };
 }
 
 /**
@@ -509,6 +619,17 @@ export async function scanOwnTweets(
   let topViews = 0;
   let totalFetched = 0;
   const MAX_TWEETS = 3200;
+
+  // Engagement tracking
+  let totalReplies = 0;
+  let totalRetweets = 0;
+  let totalLikes = 0;
+  let mediaTweetCount = 0;
+  let threadCount = 0;
+  let threadImpressions = 0;
+  let singleImpressions = 0;
+  const hourlyEngagement = new Map<number, { total: number; count: number }>();
+  const dailyEngagement = new Map<number, { total: number; count: number }>();
 
   const now = Date.now();
   const thirtyDaysAgo = now - 30 * 86400000;
@@ -568,6 +689,39 @@ export async function scanOwnTweets(
       tweetsLast90++;
       if (createdAt >= thirtyDaysAgo) tweetsLast30++;
 
+      // Extract engagement counts (already in tweet object, just not used before)
+      const replyCount = tweet.reply_count ?? 0;
+      const retweetCount = tweet.retweet_count ?? 0;
+      const likeCount = tweet.favorite_count ?? 0;
+      totalReplies += replyCount;
+      totalRetweets += retweetCount;
+      totalLikes += likeCount;
+
+      // Content type detection
+      const hasMedia = !!(
+        tweet.entities?.media?.length || tweet.extended_entities?.media?.length
+      );
+      if (hasMedia) mediaTweetCount++;
+
+      const isThread = tweet.in_reply_to_user_id_str === userId; // self-reply = thread
+      if (isThread) threadCount++;
+
+      // Posting time engagement tracking
+      const tweetDate = new Date(tweet.created_at);
+      const hour = tweetDate.getUTCHours();
+      const day = tweetDate.getUTCDay();
+      const engagement = replyCount + retweetCount + likeCount;
+
+      const hourEntry = hourlyEngagement.get(hour) ?? { total: 0, count: 0 };
+      hourEntry.total += engagement;
+      hourEntry.count++;
+      hourlyEngagement.set(hour, hourEntry);
+
+      const dayEntry = dailyEngagement.get(day) ?? { total: 0, count: 0 };
+      dayEntry.total += engagement;
+      dayEntry.count++;
+      dailyEngagement.set(day, dayEntry);
+
       // Try to extract view count
       const views =
         tweet.ext_views?.count ??
@@ -582,6 +736,13 @@ export async function scanOwnTweets(
         totalViews += viewCount;
         viewedTweets++;
         if (viewCount > topViews) topViews = viewCount;
+
+        // Track thread vs single impressions
+        if (isThread) {
+          threadImpressions += viewCount;
+        } else {
+          singleImpressions += viewCount;
+        }
       }
     }
 
@@ -616,5 +777,14 @@ export async function scanOwnTweets(
     tweetsLast90,
     avgViews,
     topViews,
+    totalReplies,
+    totalRetweets,
+    totalLikes,
+    mediaTweetCount,
+    threadCount,
+    threadImpressions,
+    singleImpressions,
+    hourlyEngagement,
+    dailyEngagement,
   };
 }

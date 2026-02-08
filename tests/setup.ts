@@ -3,8 +3,9 @@
  */
 import { vi } from "vitest";
 
-// In-memory storage for chrome.storage.local
-const storage: Record<string, unknown> = {};
+// In-memory storage for chrome.storage.local (exported for test cleanup)
+export const chromeStorageData: Record<string, unknown> = {};
+const storage = chromeStorageData;
 
 globalThis.chrome = {
   runtime: {
@@ -13,7 +14,10 @@ globalThis.chrome = {
   },
   storage: {
     local: {
-      get: vi.fn(async (keys: string | string[]) => {
+      get: vi.fn(async (keys: string | string[] | null) => {
+        if (keys === null || keys === undefined) {
+          return { ...storage };
+        }
         const result: Record<string, unknown> = {};
         const keyList = Array.isArray(keys)
           ? keys

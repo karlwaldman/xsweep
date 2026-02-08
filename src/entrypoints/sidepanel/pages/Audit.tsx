@@ -1,18 +1,17 @@
 import { useEffect, useState, useRef } from "react";
-import { getAllUsers, deleteUser, logUnfollow } from "../../../storage/db";
+import {
+  getAllUsers,
+  deleteUser,
+  logUnfollow,
+  upsertUsers,
+} from "../../../storage/db";
 import { formatTimeAgo } from "../../../utils/format";
 import type { UserProfile, ScanProgress } from "../../../core/types";
 import type { NavigateFn, ShowToastFn } from "../App";
 
 type SortKey = "username" | "followerCount" | "daysSinceLastTweet" | "status";
-type FilterStatus =
-  | "all"
-  | "active"
-  | "inactive"
-  | "suspended"
-  | "no_tweets"
-  | "mutual"
-  | "non_mutual";
+type StatusFilter = "all" | "active" | "inactive" | "suspended" | "no_tweets";
+type RelationshipFilter = "all" | "mutual" | "non_mutual" | "followers_only";
 
 interface AdvancedFilters {
   followerMin: number | null;
@@ -44,9 +43,28 @@ export default function Audit({
   showToast,
 }: Props) {
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [filter, setFilter] = useState<FilterStatus>(
-    (initialFilter as FilterStatus) || "all",
+  const statusValues: StatusFilter[] = [
+    "active",
+    "inactive",
+    "suspended",
+    "no_tweets",
+  ];
+  const relValues: RelationshipFilter[] = [
+    "mutual",
+    "non_mutual",
+    "followers_only",
+  ];
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(
+    statusValues.includes(initialFilter as StatusFilter)
+      ? (initialFilter as StatusFilter)
+      : "all",
   );
+  const [relationshipFilter, setRelationshipFilter] =
+    useState<RelationshipFilter>(
+      relValues.includes(initialFilter as RelationshipFilter)
+        ? (initialFilter as RelationshipFilter)
+        : "all",
+    );
   const [sort, setSort] = useState<SortKey>("daysSinceLastTweet");
   const [sortDesc, setSortDesc] = useState(true);
   const [search, setSearch] = useState("");
@@ -88,10 +106,18 @@ export default function Audit({
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
-  // Reset filter when initialFilter prop changes
+  // Route initialFilter to the correct dimension
   useEffect(() => {
     if (initialFilter) {
-      setFilter(initialFilter as FilterStatus);
+      if (statusValues.includes(initialFilter as StatusFilter)) {
+        setStatusFilter(initialFilter as StatusFilter);
+      } else if (relValues.includes(initialFilter as RelationshipFilter)) {
+        setRelationshipFilter(initialFilter as RelationshipFilter);
+      } else {
+        // "all" — reset both
+        setStatusFilter("all");
+        setRelationshipFilter("all");
+      }
       setPage(0);
     }
   }, [initialFilter]);
@@ -181,6 +207,48 @@ export default function Audit({
     });
   }
 
+  async function handleFollowBack(user: UserProfile) {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (!tab?.url?.includes("x.com") || !tab?.id) {
+      showToast("Navigate to x.com first");
+      return;
+    }
+
+    chrome.tabs.sendMessage(
+      tab.id,
+      { type: "FOLLOW_USER", userId: user.userId },
+      async (response: { success: boolean; error?: string } | undefined) => {
+        if (chrome.runtime.lastError) {
+          showToast(
+            `Failed: ${chrome.runtime.lastError.message || "No response from content script"}`,
+          );
+          return;
+        }
+        if (response?.success) {
+          // Update user in DB to reflect new relationship
+          user.isFollowing = true;
+          user.isMutual = true;
+          await upsertUsers([user]);
+          // Optimistically remove from followers_only view
+          setRemovedUsers((prev) => new Set([...prev, user.userId]));
+          showToast(`Followed @${user.username}`);
+        } else {
+          const err = response?.error || "Unknown error";
+          if (err.includes("429")) {
+            showToast(
+              "Rate limited — wait a few minutes before following more",
+            );
+          } else {
+            showToast(`Failed: ${err}`);
+          }
+        }
+      },
+    );
+  }
+
   async function handleProtect(user: UserProfile) {
     const next = new Set([...whitelist, user.username.toLowerCase()]);
     setWhitelist(next);
@@ -190,11 +258,20 @@ export default function Audit({
 
   const filtered = users
     .filter((u) => !removedUsers.has(u.userId))
-    .filter((u) => !whitelist.has(u.username.toLowerCase()) || filter === "all")
+    .filter(
+      (u) =>
+        !whitelist.has(u.username.toLowerCase()) ||
+        (statusFilter === "all" && relationshipFilter === "all"),
+    )
     .filter((u) => {
-      if (filter === "mutual") return u.isMutual;
-      if (filter === "non_mutual") return !u.isMutual && !u.isFollower;
-      if (filter !== "all") return u.status === filter;
+      // Status filter
+      if (statusFilter !== "all" && u.status !== statusFilter) return false;
+      // Relationship filter
+      if (relationshipFilter === "mutual" && !u.isMutual) return false;
+      if (relationshipFilter === "non_mutual" && (u.isMutual || u.isFollower))
+        return false;
+      if (relationshipFilter === "followers_only" && u.isFollowing !== false)
+        return false;
       return true;
     })
     .filter((u) => {
@@ -203,7 +280,8 @@ export default function Audit({
       return (
         u.username.toLowerCase().includes(q) ||
         u.displayName.toLowerCase().includes(q) ||
-        u.bio.toLowerCase().includes(q)
+        u.bio.toLowerCase().includes(q) ||
+        u.location.toLowerCase().includes(q)
       );
     })
     .filter((u) => {
@@ -307,6 +385,7 @@ export default function Audit({
         />
       </div>
 
+      {/* Status filters */}
       <div className="flex flex-wrap gap-1.5">
         {(
           [
@@ -315,18 +394,43 @@ export default function Audit({
             ["inactive", "Inactive"],
             ["suspended", "Suspended"],
             ["no_tweets", "No tweets"],
-            ["mutual", "Mutual"],
-            ["non_mutual", "Non-mutual"],
-          ] as [FilterStatus, string][]
+          ] as [StatusFilter, string][]
         ).map(([value, label]) => (
           <button
             key={value}
             onClick={() => {
-              setFilter(value);
+              setStatusFilter(value);
               setPage(0);
             }}
             className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-              filter === value
+              statusFilter === value
+                ? "bg-x-accent text-white"
+                : "bg-x-card text-x-text-secondary hover:text-x-text"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Relationship filters */}
+      <div className="flex flex-wrap gap-1.5">
+        {(
+          [
+            ["all", "All"],
+            ["mutual", "Mutual"],
+            ["non_mutual", "Non-mutual"],
+            ["followers_only", "Followers only"],
+          ] as [RelationshipFilter, string][]
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            onClick={() => {
+              setRelationshipFilter(value);
+              setPage(0);
+            }}
+            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+              relationshipFilter === value
                 ? "bg-x-accent text-white"
                 : "bg-x-card text-x-text-secondary hover:text-x-text"
             }`}
@@ -549,6 +653,7 @@ export default function Audit({
             isProtected={whitelist.has(user.username.toLowerCase())}
             onUnfollow={() => handleInlineUnfollow(user)}
             onProtect={() => handleProtect(user)}
+            onFollowBack={() => handleFollowBack(user)}
           />
         ))}
       </div>
@@ -584,12 +689,15 @@ function UserRow({
   isProtected,
   onUnfollow,
   onProtect,
+  onFollowBack,
 }: {
   user: UserProfile;
   isProtected: boolean;
   onUnfollow: () => void;
   onProtect: () => void;
+  onFollowBack: () => void;
 }) {
+  const isFollowerOnly = user.isFollowing === false;
   const statusColors: Record<string, string> = {
     active: "text-x-green",
     inactive: "text-x-yellow",
@@ -618,6 +726,11 @@ function UserRow({
           {user.isMutual && (
             <span className="text-[10px] bg-x-accent/20 text-x-accent px-1 rounded">
               mutual
+            </span>
+          )}
+          {isFollowerOnly && (
+            <span className="text-[10px] bg-x-green/20 text-x-green px-1 rounded">
+              follower
             </span>
           )}
           {user.isBlueVerified && (
@@ -709,26 +822,37 @@ function UserRow({
             </svg>
           </button>
         )}
-        {/* Unfollow button — single click, undo via toast */}
-        <button
-          onClick={onUnfollow}
-          className="p-1 text-x-text-secondary hover:text-x-red transition-colors"
-          title="Unfollow"
-        >
-          <svg
-            className="w-3.5 h-3.5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
+        {isFollowerOnly ? (
+          /* Follow back button for follower-only users */
+          <button
+            onClick={onFollowBack}
+            className="px-2 py-0.5 text-[10px] font-medium bg-x-accent text-white rounded-full hover:bg-x-accent-hover transition-colors"
+            title="Follow back"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
+            Follow
+          </button>
+        ) : (
+          /* Unfollow button — single click, undo via toast */
+          <button
+            onClick={onUnfollow}
+            className="p-1 text-x-text-secondary hover:text-x-red transition-colors"
+            title="Unfollow"
+          >
+            <svg
+              className="w-3.5 h-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   );

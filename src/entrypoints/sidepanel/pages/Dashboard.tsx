@@ -17,6 +17,7 @@ import {
   saveMonetizationData,
   getRequirements,
   getCoachingTips,
+  estimatePayout,
 } from "../../../core/monetization";
 import type { MonetizationData } from "../../../core/monetization";
 import { formatCount } from "../../../utils/format";
@@ -26,6 +27,7 @@ import type {
   AccountHealth,
   SmartList,
   ScanProgress,
+  UserProfile,
 } from "../../../core/types";
 import type { Recommendation } from "../../../core/health-recommendations";
 import type { NavigateFn, ShowToastFn } from "../App";
@@ -96,24 +98,113 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
         );
       }
       if (message.type === "MONETIZATION_COMPLETE" && message.data) {
-        const d = message.data as {
-          verifiedFollowers: number;
-          totalFollowers: number;
-          organicImpressions: number;
-          impressionsAvailable: boolean;
-          tweetsLast30Days: number;
-          tweetsLast90Days: number;
-          avgViewsPerTweet: number;
-          topTweetViews: number;
-        };
-        const updated: MonetizationData = {
-          ...d,
+        const d = message.data as Record<string, unknown>;
+        const impressions = (d.organicImpressions as number) || 0;
+        const totalReplies = (d.totalReplies as number) || 0;
+        const totalRetweets = (d.totalRetweets as number) || 0;
+        const totalLikes = (d.totalLikes as number) || 0;
+        const tweetsLast90 = (d.tweetsLast90Days as number) || 0;
+        const totalFollowers = (d.totalFollowers as number) || 0;
+        const verifiedFollowers = (d.verifiedFollowers as number) || 0;
+        const mediaTweetCount = (d.mediaTweetCount as number) || 0;
+        const threadCount = (d.threadCount as number) || 0;
+        const threadImpressions = (d.threadImpressions as number) || 0;
+        const singleImpressions = (d.singleImpressions as number) || 0;
+
+        // Compute derived metrics
+        const totalEngagement = totalReplies + totalRetweets + totalLikes;
+        const engagementRate =
+          impressions > 0 ? totalEngagement / impressions : 0;
+        const avgRepliesPerTweet =
+          tweetsLast90 > 0 ? totalReplies / tweetsLast90 : 0;
+        const replyRate = impressions > 0 ? totalReplies / impressions : 0;
+        const mediaTweetPercent =
+          tweetsLast90 > 0 ? (mediaTweetCount / tweetsLast90) * 100 : 0;
+        const verifiedFollowerPercent =
+          totalFollowers > 0 ? (verifiedFollowers / totalFollowers) * 100 : 0;
+
+        // Compute thread engagement comparison
+        const nonThreadCount = tweetsLast90 - threadCount;
+        const avgThreadEng =
+          threadCount > 0 ? threadImpressions / threadCount : 0;
+        const avgSingleEng =
+          nonThreadCount > 0 ? singleImpressions / nonThreadCount : 0;
+        const avgThreadEngagement =
+          avgSingleEng > 0 ? avgThreadEng / avgSingleEng : 0;
+
+        // Compute peak hours/days from engagement maps
+        const hourlyEntries =
+          (d.hourlyEngagement as Array<
+            [number, { total: number; count: number }]
+          >) || [];
+        const dailyEntries =
+          (d.dailyEngagement as Array<
+            [number, { total: number; count: number }]
+          >) || [];
+
+        const peakHours = hourlyEntries
+          .map(([hour, { total, count }]) => ({
+            hour,
+            avg: count > 0 ? total / count : 0,
+          }))
+          .sort((a, b) => b.avg - a.avg)
+          .slice(0, 3)
+          .map((e) => e.hour);
+
+        const peakDays = dailyEntries
+          .map(([day, { total, count }]) => ({
+            day,
+            avg: count > 0 ? total / count : 0,
+          }))
+          .sort((a, b) => b.avg - a.avg)
+          .slice(0, 3)
+          .map((e) => e.day);
+
+        const partial: MonetizationData = {
+          userId: (d.userId as string) || "",
+          verifiedFollowers,
+          totalFollowers,
+          organicImpressions: impressions,
+          impressionsAvailable: (d.impressionsAvailable as boolean) || false,
+          tweetsLast30Days: (d.tweetsLast30Days as number) || 0,
+          tweetsLast90Days: tweetsLast90,
+          avgViewsPerTweet: (d.avgViewsPerTweet as number) || 0,
+          topTweetViews: (d.topTweetViews as number) || 0,
           manualImpressions: monetization?.manualImpressions ?? 0,
           identityVerified: monetization?.identityVerified ?? false,
           lastChecked: new Date().toISOString(),
+          // Engagement
+          totalReplies,
+          totalRetweets,
+          totalLikes,
+          engagementRate,
+          avgRepliesPerTweet,
+          replyRate,
+          // Content
+          mediaTweetPercent,
+          threadCount,
+          avgThreadEngagement,
+          // Peak times
+          peakHours,
+          peakDays,
+          // Verified intelligence
+          verifiedFollowerPercent,
+          topVerifiedFollowers:
+            (d.topVerifiedFollowers as MonetizationData["topVerifiedFollowers"]) ||
+            [],
+          // Geo
+          topLocations:
+            (d.topLocations as MonetizationData["topLocations"]) || [],
+          // Payout — computed after object created
+          estimatedMonthlyPayout: 0,
+          projectedAnnualPayout: 0,
         };
-        saveMonetizationData(updated);
-        setMonetization(updated);
+        const payout = estimatePayout(partial);
+        partial.estimatedMonthlyPayout = payout.monthly;
+        partial.projectedAnnualPayout = payout.annual;
+
+        saveMonetizationData(partial);
+        setMonetization(partial);
         setMonetizationScanning(false);
         setMonetizationProgress(null);
       }
@@ -343,7 +434,7 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
         onUpdateImpressions={updateManualImpressions}
       />
 
-      {/* Stat Cards */}
+      {/* Relationship Stats */}
       <div className="grid grid-cols-2 gap-3">
         <StatCard
           label="Following"
@@ -358,11 +449,24 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
           onClick={() => navigateTo("audit", { auditFilter: "mutual" })}
         />
         <StatCard
+          label="Followers only"
+          value={counts.followersOnly}
+          color="text-x-accent"
+          onClick={() =>
+            navigateTo("audit", {
+              auditFilter: "followers_only",
+              sortBy: "followerCount",
+              sortDesc: true,
+            })
+          }
+        />
+        <StatCard
           label="Don't follow back"
           value={counts.notFollowingBack}
           color="text-x-orange"
           onClick={() => navigateTo("audit", { auditFilter: "non_mutual" })}
         />
+        <RatioCard followers={followerCount} following={counts.total} />
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -385,6 +489,20 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
           onClick={() => navigateTo("audit", { auditFilter: "no_tweets" })}
         />
       </div>
+
+      {/* Ratio Optimizer */}
+      {health && (
+        <RatioOptimizer
+          counts={counts}
+          followerCount={followerCount}
+          navigateTo={navigateTo}
+        />
+      )}
+
+      {/* Follow-Back Opportunities */}
+      {counts.followersOnly > 0 && (
+        <FollowBackOpportunities navigateTo={navigateTo} />
+      )}
 
       {/* Quick Stats — Clickable tier & activity badges */}
       {quickStats && (
@@ -661,12 +779,12 @@ function MonetizationCard({
   onUpdateImpressions: (value: string) => void;
 }) {
   const [expanded, setExpanded] = useState(!data);
+  const [showAudience, setShowAudience] = useState(false);
+  const [showGeo, setShowGeo] = useState(false);
 
-  // If scanning, always show expanded
   const isExpanded = expanded || scanning;
 
   if (!data && !scanning) {
-    // Collapsed state — no data yet
     return (
       <div className="bg-x-card rounded-xl p-4">
         <button
@@ -690,57 +808,313 @@ function MonetizationCard({
   const tips = data ? getCoachingTips(data) : [];
   const metCount = requirements.filter((r) => r.met).length;
   const timeAgo = data?.lastChecked ? getRelativeTime(data.lastChecked) : null;
+  const payout = data ? estimatePayout(data) : { monthly: 0, annual: 0 };
+
+  const payoutColor =
+    payout.monthly >= 100
+      ? "text-x-green"
+      : payout.monthly >= 10
+        ? "text-x-yellow"
+        : "text-x-red";
+
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   return (
-    <div className="bg-x-card rounded-xl p-4">
-      <button
-        onClick={() => setExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between mb-1"
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-lg">&#x1F4B0;</span>
-          <span className="text-sm font-semibold">Creator Monetization</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-x-text-secondary">
-            {metCount}/{requirements.length}
-          </span>
-          <span className="text-xs text-x-text-secondary">
-            {isExpanded ? "\u25B2" : "\u25BC"}
-          </span>
-        </div>
-      </button>
+    <div className="space-y-3">
+      {/* Header card with payout estimator */}
+      <div className="bg-x-card rounded-xl p-4">
+        <button
+          onClick={() => setExpanded(!isExpanded)}
+          className="w-full flex items-center justify-between mb-1"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-lg">&#x1F4B0;</span>
+            <span className="text-sm font-semibold">
+              Monetization Intelligence
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-x-text-secondary">
+              {metCount}/{requirements.length}
+            </span>
+            <span className="text-xs text-x-text-secondary">
+              {isExpanded ? "\u25B2" : "\u25BC"}
+            </span>
+          </div>
+        </button>
 
-      {timeAgo && (
-        <div className="text-[10px] text-x-text-secondary mb-3">
-          Last checked: {timeAgo}
-        </div>
-      )}
+        {timeAgo && (
+          <div className="text-[10px] text-x-text-secondary mb-3">
+            Last checked: {timeAgo}
+            {data?.userId && (
+              <span className="ml-1 text-x-accent">
+                (Profile: {data.userId.slice(-6)})
+              </span>
+            )}
+          </div>
+        )}
 
-      {isExpanded && (
-        <div className="space-y-3">
-          {/* Progress bars for each requirement */}
-          {scanning && progress ? (
-            <div className="space-y-2">
-              <div className="text-xs font-medium">
-                {progress.phase === "followers"
-                  ? "Scanning followers..."
-                  : "Scanning tweets..."}
+        {/* Scanning progress */}
+        {scanning && progress && (
+          <div className="space-y-2">
+            <div className="text-xs font-medium">
+              {progress.phase === "followers"
+                ? "Scanning followers..."
+                : "Scanning tweets..."}
+            </div>
+            <div className="w-full bg-x-border rounded-full h-1.5">
+              <div
+                className="h-1.5 rounded-full bg-x-accent transition-all duration-300"
+                style={{
+                  width: `${progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 10}%`,
+                }}
+              />
+            </div>
+            <div className="text-[10px] text-x-text-secondary">
+              {progress.done.toLocaleString()} processed
+            </div>
+          </div>
+        )}
+
+        {/* Payout Estimator — always visible when expanded and data present */}
+        {isExpanded && data && !scanning && (
+          <>
+            <div className="bg-x-bg rounded-lg p-3 mb-3">
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="text-xs text-x-text-secondary">
+                  Est. Monthly
+                </span>
+                <span className={`text-xl font-bold ${payoutColor}`}>
+                  ${payout.monthly.toFixed(2)}
+                </span>
               </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs text-x-text-secondary">
+                  Projected Annual
+                </span>
+                <span className="text-sm font-semibold text-x-text">
+                  ${payout.annual.toFixed(2)}
+                </span>
+              </div>
+              <div className="text-[10px] text-x-text-secondary mt-1">
+                Based on{" "}
+                {formatCount(
+                  Math.max(data.organicImpressions, data.manualImpressions),
+                )}{" "}
+                impressions, {(data.engagementRate * 100).toFixed(2)}%
+                engagement
+              </div>
+            </div>
+          </>
+        )}
+
+        {error && <p className="text-x-red text-xs">{error}</p>}
+      </div>
+
+      {isExpanded && data && !scanning && (
+        <>
+          {/* Engagement Quality Card */}
+          <div className="bg-x-card rounded-xl p-4">
+            <h3 className="text-xs font-semibold mb-3">Engagement Quality</h3>
+            <div className="space-y-2.5">
+              <MetricBar
+                label="Reply Rate"
+                value={data.replyRate * 100}
+                target={1}
+                suffix="%"
+                decimals={2}
+              />
+              <MetricBar
+                label="Engagement"
+                value={data.engagementRate * 100}
+                target={2}
+                suffix="%"
+                decimals={2}
+              />
+              <MetricBar
+                label="Media Usage"
+                value={data.mediaTweetPercent}
+                target={50}
+                suffix="%"
+                decimals={0}
+              />
+              <MetricBar
+                label="Threads (90d)"
+                value={data.threadCount}
+                target={12}
+                suffix=""
+                decimals={0}
+              />
+            </div>
+            {data.avgThreadEngagement > 0 && (
+              <div className="text-[10px] text-x-text-secondary mt-2">
+                Threads get {data.avgThreadEngagement.toFixed(1)}x engagement vs
+                singles
+              </div>
+            )}
+          </div>
+
+          {/* Best Time to Post */}
+          {data.peakHours.length > 0 && (
+            <div className="bg-x-card rounded-xl p-4">
+              <h3 className="text-xs font-semibold mb-2">Best Time to Post</h3>
+              <div className="flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-x-text-secondary">Peak hours: </span>
+                  <span className="font-medium">
+                    {data.peakHours
+                      .slice(0, 3)
+                      .map((h) => `${h}:00`)
+                      .join(", ")}{" "}
+                    UTC
+                  </span>
+                </div>
+              </div>
+              {data.peakDays.length > 0 && (
+                <div className="flex items-center justify-between text-xs mt-1">
+                  <div>
+                    <span className="text-x-text-secondary">Best days: </span>
+                    <span className="font-medium">
+                      {data.peakDays
+                        .slice(0, 3)
+                        .map((d) => dayNames[d])
+                        .join(", ")}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Premium Audience — collapsible */}
+          <div className="bg-x-card rounded-xl p-4">
+            <button
+              onClick={() => setShowAudience(!showAudience)}
+              className="w-full flex items-center justify-between"
+            >
+              <h3 className="text-xs font-semibold">Your Premium Audience</h3>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-x-text-secondary">
+                  {data.verifiedFollowerPercent.toFixed(1)}% verified
+                </span>
+                <span className="text-xs text-x-text-secondary">
+                  {showAudience ? "\u25B2" : "\u25BC"}
+                </span>
+              </div>
+            </button>
+
+            {/* Verified % bar always visible */}
+            <div className="mt-2">
               <div className="w-full bg-x-border rounded-full h-1.5">
                 <div
-                  className="h-1.5 rounded-full bg-x-accent transition-all duration-300"
+                  className="h-1.5 rounded-full bg-x-accent transition-all"
                   style={{
-                    width: `${progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 10}%`,
+                    width: `${Math.min(100, data.verifiedFollowerPercent)}%`,
                   }}
                 />
               </div>
-              <div className="text-[10px] text-x-text-secondary">
-                {progress.done.toLocaleString()} processed
+              <div className="text-[10px] text-x-text-secondary mt-1">
+                {data.verifiedFollowers.toLocaleString()} verified /{" "}
+                {data.totalFollowers.toLocaleString()} total — target: 2,000
               </div>
             </div>
-          ) : (
-            <>
+
+            {showAudience && data.topVerifiedFollowers.length > 0 && (
+              <div className="mt-3 space-y-2">
+                <div className="text-[10px] text-x-text-secondary">
+                  Top verified followers (their engagement drives your revenue)
+                </div>
+                {data.topVerifiedFollowers.slice(0, 5).map((f) => (
+                  <div
+                    key={f.userId}
+                    className="flex items-center gap-2 py-0.5"
+                  >
+                    {f.profileImageUrl ? (
+                      <img
+                        src={f.profileImageUrl}
+                        alt=""
+                        className="w-5 h-5 rounded-full flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-5 h-5 rounded-full bg-x-border flex-shrink-0" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[11px] font-medium truncate">
+                        {f.displayName}
+                      </div>
+                      <div className="text-[10px] text-x-text-secondary truncate">
+                        @{f.username} · {formatCount(f.followerCount)} followers
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Geographic Distribution — collapsible */}
+          {data.topLocations.length > 0 && (
+            <div className="bg-x-card rounded-xl p-4">
+              <button
+                onClick={() => setShowGeo(!showGeo)}
+                className="w-full flex items-center justify-between"
+              >
+                <h3 className="text-xs font-semibold">Follower Geography</h3>
+                <span className="text-xs text-x-text-secondary">
+                  {showGeo ? "\u25B2" : "\u25BC"}
+                </span>
+              </button>
+
+              {showGeo && (
+                <div className="mt-3 space-y-1.5">
+                  {data.topLocations.slice(0, 5).map((loc) => {
+                    const maxCount = data.topLocations[0].count;
+                    const pct =
+                      maxCount > 0
+                        ? Math.round((loc.count / maxCount) * 100)
+                        : 0;
+                    const isHighCPM = [
+                      "us",
+                      "usa",
+                      "united states",
+                      "uk",
+                      "united kingdom",
+                      "canada",
+                      "australia",
+                    ].some((kw) => loc.location.includes(kw));
+                    return (
+                      <div key={loc.location}>
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="capitalize truncate max-w-[60%]">
+                            {loc.location}
+                            {isHighCPM && (
+                              <span className="text-x-green ml-1">$</span>
+                            )}
+                          </span>
+                          <span className="text-x-text-secondary">
+                            {loc.count}
+                          </span>
+                        </div>
+                        <div className="w-full bg-x-border rounded-full h-1 mt-0.5">
+                          <div
+                            className="h-1 rounded-full bg-x-accent transition-all"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Requirements — existing threshold progress */}
+          <div className="bg-x-card rounded-xl p-4">
+            <h3 className="text-xs font-semibold mb-3">
+              Eligibility Requirements
+            </h3>
+            <div className="space-y-3">
               {requirements.map((req) => (
                 <RequirementRow
                   key={req.id}
@@ -749,80 +1123,134 @@ function MonetizationCard({
                   onToggle={onToggleIdentity}
                 />
               ))}
+            </div>
 
-              {/* Manual impressions entry (if API data not available) */}
-              {data && !data.impressionsAvailable && (
-                <div className="pt-2 border-t border-x-border">
-                  <label className="text-[10px] text-x-text-secondary block mb-1">
-                    Manual impression count (from{" "}
-                    <a
-                      href="https://analytics.x.com"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-x-accent underline"
+            {data && !data.impressionsAvailable && (
+              <div className="pt-2 border-t border-x-border mt-3">
+                <label className="text-[10px] text-x-text-secondary block mb-1">
+                  Manual impression count (from{" "}
+                  <a
+                    href="https://analytics.x.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-x-accent underline"
+                  >
+                    analytics.x.com
+                  </a>
+                  )
+                </label>
+                <input
+                  type="text"
+                  defaultValue={
+                    data.manualImpressions > 0
+                      ? data.manualImpressions.toLocaleString()
+                      : ""
+                  }
+                  onBlur={(e) => onUpdateImpressions(e.target.value)}
+                  placeholder="e.g. 2500000"
+                  className="w-full px-2 py-1 text-xs bg-x-bg border border-x-border rounded-lg focus:border-x-accent focus:outline-none"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Smart Coaching — data-driven tips */}
+          {tips.length > 0 && (
+            <div className="bg-x-card rounded-xl p-4">
+              <h3 className="text-xs font-semibold mb-2">Smart Coaching</h3>
+              <div className="space-y-2">
+                {tips.slice(0, 5).map((tip) => (
+                  <div
+                    key={tip.id}
+                    className="flex items-start gap-2 text-[11px]"
+                  >
+                    <span
+                      className={`flex-shrink-0 mt-0.5 ${
+                        tip.priority === "high"
+                          ? "text-x-red"
+                          : tip.priority === "medium"
+                            ? "text-x-yellow"
+                            : "text-x-green"
+                      }`}
                     >
-                      analytics.x.com
-                    </a>
-                    )
-                  </label>
-                  <input
-                    type="text"
-                    defaultValue={
-                      data.manualImpressions > 0
-                        ? data.manualImpressions.toLocaleString()
-                        : ""
-                    }
-                    onBlur={(e) => onUpdateImpressions(e.target.value)}
-                    placeholder="e.g. 2500000"
-                    className="w-full px-2 py-1 text-xs bg-x-bg border border-x-border rounded-lg focus:border-x-accent focus:outline-none"
-                  />
-                </div>
-              )}
-
-              {/* Coaching tips */}
-              {tips.length > 0 && (
-                <div className="pt-2 border-t border-x-border">
-                  <div className="text-xs font-medium text-x-text-secondary mb-2">
-                    Coaching
+                      {tip.priority === "high"
+                        ? "!"
+                        : tip.priority === "medium"
+                          ? "\u25CF"
+                          : "\u2713"}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{tip.title}</div>
+                      {tip.estimatedImpact && (
+                        <div className="text-x-green text-[10px]">
+                          {tip.estimatedImpact}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="space-y-1.5">
-                    {tips.slice(0, 3).map((tip) => (
-                      <div key={tip.id} className="text-[11px]">
-                        <span
-                          className={
-                            tip.priority === "high"
-                              ? "text-x-red"
-                              : tip.priority === "medium"
-                                ? "text-x-yellow"
-                                : "text-x-green"
-                          }
-                        >
-                          {tip.priority === "high"
-                            ? "!"
-                            : tip.priority === "medium"
-                              ? "\u25CF"
-                              : "\u2713"}
-                        </span>{" "}
-                        {tip.title}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Check progress button */}
-              <button
-                onClick={onCheckProgress}
-                className="w-full px-3 py-1.5 bg-x-accent/10 text-x-accent rounded-full text-xs font-medium hover:bg-x-accent/20 transition-colors"
-              >
-                {data ? "Refresh Progress" : "Check Progress"}
-              </button>
-            </>
+                ))}
+              </div>
+            </div>
           )}
 
-          {error && <p className="text-x-red text-xs">{error}</p>}
-        </div>
+          {/* Refresh button */}
+          <button
+            onClick={onCheckProgress}
+            className="w-full px-3 py-1.5 bg-x-accent/10 text-x-accent rounded-full text-xs font-medium hover:bg-x-accent/20 transition-colors"
+          >
+            Refresh Progress
+          </button>
+        </>
       )}
+    </div>
+  );
+}
+
+/** Metric bar for engagement quality section */
+function MetricBar({
+  label,
+  value,
+  target,
+  suffix,
+  decimals,
+}: {
+  label: string;
+  value: number;
+  target: number;
+  suffix: string;
+  decimals: number;
+}) {
+  const percent = target > 0 ? Math.min(100, (value / target) * 100) : 0;
+  const met = value >= target;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-0.5">
+        <span className="text-[11px] text-x-text-secondary">{label}</span>
+        <span className="text-[11px]">
+          <span className={met ? "text-x-green font-medium" : ""}>
+            {value.toFixed(decimals)}
+            {suffix}
+          </span>
+          <span className="text-x-text-secondary">
+            {" "}
+            / {target}
+            {suffix}
+          </span>
+        </span>
+      </div>
+      <div className="w-full bg-x-border rounded-full h-1.5">
+        <div
+          className="h-1.5 rounded-full transition-all"
+          style={{
+            width: `${Math.round(percent)}%`,
+            backgroundColor: met
+              ? "#00ba7c"
+              : percent >= 50
+                ? "#ffd400"
+                : "#f4212e",
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -986,5 +1414,185 @@ function ClickableBadge({
       <span className={`font-semibold ${color}`}>{formatCount(count)}</span>
       <span className="text-x-text-secondary">{label}</span>
     </button>
+  );
+}
+
+function RatioCard({
+  followers,
+  following,
+}: {
+  followers: number;
+  following: number;
+}) {
+  const ratio = following > 0 ? followers / following : 0;
+  const ratioStr = ratio.toFixed(2);
+  const color =
+    ratio >= 1.0
+      ? "text-x-green"
+      : ratio >= 0.5
+        ? "text-x-yellow"
+        : "text-x-red";
+
+  return (
+    <div className="bg-x-card rounded-xl p-3">
+      <div className={`text-xl font-bold ${color}`}>{ratioStr}</div>
+      <div className="text-xs text-x-text-secondary">Follow Ratio</div>
+    </div>
+  );
+}
+
+function RatioOptimizer({
+  counts,
+  followerCount,
+  navigateTo,
+}: {
+  counts: AuditCounts;
+  followerCount: number;
+  navigateTo: NavigateFn;
+}) {
+  const deadWeight = counts.inactive + counts.suspended;
+  const currentRatio =
+    counts.total > 0 ? (followerCount / counts.total).toFixed(2) : "0.00";
+  const cleanedFollowing = counts.total - deadWeight;
+  const cleanedRatio =
+    cleanedFollowing > 0
+      ? (followerCount / cleanedFollowing).toFixed(2)
+      : "0.00";
+
+  const ratioColor = (r: string) => {
+    const n = parseFloat(r);
+    if (n >= 1.0) return "text-x-green";
+    if (n >= 0.5) return "text-x-yellow";
+    return "text-x-red";
+  };
+
+  return (
+    <div className="bg-x-card rounded-xl p-4 space-y-3">
+      <h3 className="text-sm font-semibold">Ratio Optimizer</h3>
+
+      <div className="space-y-2 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="text-x-text-secondary">Current ratio</span>
+          <span className={`font-bold ${ratioColor(currentRatio)}`}>
+            {currentRatio}:1
+          </span>
+        </div>
+
+        {deadWeight > 0 && (
+          <div className="flex items-center justify-between">
+            <span className="text-x-text-secondary">
+              After removing {deadWeight} dead accounts
+            </span>
+            <span className={`font-bold ${ratioColor(cleanedRatio)}`}>
+              {cleanedRatio}:1
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {deadWeight > 0 && (
+          <button
+            onClick={() => navigateTo("unfollow")}
+            className="px-3 py-1.5 bg-x-red/10 text-x-red rounded-full text-xs font-medium hover:bg-x-red/20 transition-colors"
+          >
+            Clean dead weight →
+          </button>
+        )}
+        {counts.followersOnly > 0 && (
+          <button
+            onClick={() =>
+              navigateTo("audit", {
+                auditFilter: "followers_only",
+                sortBy: "followerCount",
+                sortDesc: true,
+              })
+            }
+            className="px-3 py-1.5 bg-x-accent/10 text-x-accent rounded-full text-xs font-medium hover:bg-x-accent/20 transition-colors"
+          >
+            Follow-back opportunities →
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FollowBackOpportunities({ navigateTo }: { navigateTo: NavigateFn }) {
+  const [topFollowers, setTopFollowers] = useState<UserProfile[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    loadTopFollowers();
+  }, []);
+
+  async function loadTopFollowers() {
+    const users = await getAllUsers();
+    const followerOnly = users
+      .filter((u) => u.isFollowing === false)
+      .sort((a, b) => b.followerCount - a.followerCount);
+    setTotalCount(followerOnly.length);
+    setTopFollowers(followerOnly.slice(0, 5));
+  }
+
+  if (topFollowers.length === 0) return null;
+
+  return (
+    <div className="bg-x-card rounded-xl p-4">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between"
+      >
+        <h3 className="text-sm font-semibold">Follow-Back Opportunities</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-x-text-secondary">
+            {totalCount} users
+          </span>
+          <span className="text-xs text-x-text-secondary">
+            {expanded ? "\u25B2" : "\u25BC"}
+          </span>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="mt-3 space-y-2">
+          {topFollowers.map((user) => (
+            <div key={user.userId} className="flex items-center gap-2 py-1">
+              {user.profileImageUrl ? (
+                <img
+                  src={user.profileImageUrl}
+                  alt=""
+                  className="w-6 h-6 rounded-full flex-shrink-0"
+                />
+              ) : (
+                <div className="w-6 h-6 rounded-full bg-x-border flex-shrink-0" />
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium truncate">
+                  {user.displayName}
+                </div>
+                <div className="text-[10px] text-x-text-secondary truncate">
+                  @{user.username} · {formatCount(user.followerCount)} followers
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <button
+            onClick={() =>
+              navigateTo("audit", {
+                auditFilter: "followers_only",
+                sortBy: "followerCount",
+                sortDesc: true,
+              })
+            }
+            className="w-full px-3 py-1.5 bg-x-accent/10 text-x-accent rounded-full text-xs font-medium hover:bg-x-accent/20 transition-colors mt-2"
+          >
+            View all {totalCount} →
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

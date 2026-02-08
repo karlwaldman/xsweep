@@ -100,6 +100,7 @@ async function handleFinalizeScan(
   // Store counts in chrome.storage.local
   await chrome.storage.local.set({
     xsweep_follower_ids: followerIds,
+    xsweep_following_ids: followingIds,
     xsweep_following_count: followingIds.length,
     xsweep_follower_count: followerIds.length,
     xsweep_last_scan: new Date().toISOString(),
@@ -107,10 +108,13 @@ async function handleFinalizeScan(
 
   // Update relationship fields on all stored users
   const followerSet = new Set(followerIds.map(String));
+  const followingSet = new Set(followingIds.map(String));
   const users = await getAllUsers();
   for (const user of users) {
+    user.isFollowing = followingSet.has(user.userId);
     user.isFollower = followerSet.has(user.userId);
-    user.isMutual = followerSet.has(user.userId);
+    user.isMutual =
+      followingSet.has(user.userId) && followerSet.has(user.userId);
   }
   await upsertUsers(users);
 }

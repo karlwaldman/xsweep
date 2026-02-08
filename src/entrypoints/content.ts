@@ -4,7 +4,12 @@
  * Communicates with side panel via chrome.runtime messages.
  */
 
-import { extractBearerToken, isAuthenticated } from "../core/auth";
+import {
+  extractBearerToken,
+  isAuthenticated,
+  getHeaders,
+  getMyUserId,
+} from "../core/auth";
 import {
   fullScan,
   stopScan,
@@ -193,9 +198,41 @@ async function handleMessage(
       break;
     }
 
+    case "FOLLOW_USER": {
+      try {
+        await extractBearerToken();
+        const headers = {
+          ...getHeaders(),
+          "content-type": "application/x-www-form-urlencoded",
+        };
+        const resp = await fetch(
+          "https://x.com/i/api/1.1/friendships/create.json",
+          {
+            method: "POST",
+            headers,
+            credentials: "include",
+            body: new URLSearchParams({ user_id: message.userId }),
+          },
+        );
+        if (resp.ok) {
+          sendResponse({ success: true });
+        } else {
+          sendResponse({
+            success: false,
+            error: `friendships/create.json: ${resp.status}`,
+          });
+        }
+      } catch (e) {
+        const error = e instanceof Error ? e.message : "Unknown error";
+        sendResponse({ success: false, error });
+      }
+      break;
+    }
+
     case "SCAN_MONETIZATION": {
       try {
         await extractBearerToken();
+        const userId = getMyUserId();
 
         // Phase 1: Scan followers
         const followers = await scanVerifiedFollowers((progress) => {
@@ -216,6 +253,7 @@ async function handleMessage(
         sendMessage({
           type: "MONETIZATION_COMPLETE",
           data: {
+            userId,
             verifiedFollowers: followers.verified,
             totalFollowers: followers.total,
             organicImpressions: tweets.impressions,
@@ -224,6 +262,20 @@ async function handleMessage(
             tweetsLast90Days: tweets.tweetsLast90,
             avgViewsPerTweet: tweets.avgViews,
             topTweetViews: tweets.topViews,
+            // Engagement metrics
+            totalReplies: tweets.totalReplies,
+            totalRetweets: tweets.totalRetweets,
+            totalLikes: tweets.totalLikes,
+            mediaTweetCount: tweets.mediaTweetCount,
+            threadCount: tweets.threadCount,
+            threadImpressions: tweets.threadImpressions,
+            singleImpressions: tweets.singleImpressions,
+            hourlyEngagement: Array.from(tweets.hourlyEngagement.entries()),
+            dailyEngagement: Array.from(tweets.dailyEngagement.entries()),
+            // Verified follower profiles
+            topVerifiedFollowers: followers.topVerifiedFollowers,
+            // Geographic distribution
+            topLocations: followers.topLocations,
           },
         });
         sendResponse({ success: true });

@@ -9,6 +9,7 @@ export interface UserProfile {
   lastTweetDate: string | null;
   daysSinceLastTweet: number | null;
   status: UserStatus;
+  isFollowing: boolean;
   isFollower: boolean;
   isMutual: boolean;
   isVerified: boolean;
@@ -84,6 +85,7 @@ export interface AuditCounts {
   mutual: number;
   notFollowingBack: number;
   notFollowedBack: number;
+  followersOnly: number;
 }
 
 export interface AccountHealth {
@@ -129,6 +131,7 @@ export type MessageType =
       mode: "public" | "private";
     }
   | { type: "ADD_X_LIST_MEMBER"; listId: string; userId: string }
+  | { type: "FOLLOW_USER"; userId: string }
   | { type: "SCAN_MONETIZATION" }
   | { type: "STOP_MONETIZATION" }
   | {
@@ -138,6 +141,7 @@ export type MessageType =
   | {
       type: "MONETIZATION_COMPLETE";
       data: {
+        userId: string; // which profile this data belongs to
         verifiedFollowers: number;
         totalFollowers: number;
         organicImpressions: number;
@@ -146,6 +150,26 @@ export type MessageType =
         tweetsLast90Days: number;
         avgViewsPerTweet: number;
         topTweetViews: number;
+        // Engagement metrics
+        totalReplies: number;
+        totalRetweets: number;
+        totalLikes: number;
+        mediaTweetCount: number;
+        threadCount: number;
+        threadImpressions: number;
+        singleImpressions: number;
+        hourlyEngagement: Array<[number, { total: number; count: number }]>;
+        dailyEngagement: Array<[number, { total: number; count: number }]>;
+        // Verified follower profiles
+        topVerifiedFollowers: Array<{
+          userId: string;
+          username: string;
+          displayName: string;
+          followerCount: number;
+          profileImageUrl: string;
+        }>;
+        // Geographic distribution
+        topLocations: Array<{ location: string; count: number }>;
       };
     }
   | { type: "MONETIZATION_ERROR"; error: string };

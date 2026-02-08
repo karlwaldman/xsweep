@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   getRequirements,
   getCoachingTips,
+  estimatePayout,
   loadMonetizationData,
   saveMonetizationData,
 } from "@/core/monetization";
@@ -9,6 +10,7 @@ import type { MonetizationData } from "@/core/monetization";
 
 function makeData(overrides: Partial<MonetizationData> = {}): MonetizationData {
   return {
+    userId: "12345",
     verifiedFollowers: 0,
     totalFollowers: 0,
     organicImpressions: 0,
@@ -20,6 +22,28 @@ function makeData(overrides: Partial<MonetizationData> = {}): MonetizationData {
     topTweetViews: 0,
     lastChecked: new Date().toISOString(),
     identityVerified: false,
+    // Engagement
+    totalReplies: 0,
+    totalRetweets: 0,
+    totalLikes: 0,
+    engagementRate: 0,
+    avgRepliesPerTweet: 0,
+    replyRate: 0,
+    // Content
+    mediaTweetPercent: 0,
+    threadCount: 0,
+    avgThreadEngagement: 0,
+    // Peak times
+    peakHours: [],
+    peakDays: [],
+    // Verified intelligence
+    verifiedFollowerPercent: 0,
+    topVerifiedFollowers: [],
+    // Geo
+    topLocations: [],
+    // Payout
+    estimatedMonthlyPayout: 0,
+    projectedAnnualPayout: 0,
     ...overrides,
   };
 }
@@ -93,6 +117,59 @@ describe("getRequirements", () => {
   });
 });
 
+describe("estimatePayout", () => {
+  it("returns zero payout when no impressions", () => {
+    const data = makeData();
+    const payout = estimatePayout(data);
+    expect(payout.monthly).toBe(0);
+    expect(payout.annual).toBe(0);
+  });
+
+  it("calculates base payout from impressions", () => {
+    const data = makeData({
+      organicImpressions: 3_000_000, // 1M per month
+      engagementRate: 0.02, // baseline = 1.0x multiplier
+      replyRate: 0.005, // baseline = 1.0x bonus
+    });
+    const payout = estimatePayout(data);
+    // 1M / 1M * 8.5 * 1.0 * 1.0 = $8.50/mo
+    expect(payout.monthly).toBe(8.5);
+    expect(payout.annual).toBe(102);
+  });
+
+  it("increases payout with higher engagement rate", () => {
+    const base = makeData({
+      organicImpressions: 3_000_000,
+      engagementRate: 0.02,
+      replyRate: 0.005,
+    });
+    const high = makeData({
+      organicImpressions: 3_000_000,
+      engagementRate: 0.04, // 2x baseline
+      replyRate: 0.005,
+    });
+    expect(estimatePayout(high).monthly).toBeGreaterThan(
+      estimatePayout(base).monthly,
+    );
+  });
+
+  it("increases payout with higher reply rate", () => {
+    const base = makeData({
+      organicImpressions: 3_000_000,
+      engagementRate: 0.02,
+      replyRate: 0.005,
+    });
+    const high = makeData({
+      organicImpressions: 3_000_000,
+      engagementRate: 0.02,
+      replyRate: 0.015, // 3x baseline
+    });
+    expect(estimatePayout(high).monthly).toBeGreaterThan(
+      estimatePayout(base).monthly,
+    );
+  });
+});
+
 describe("getCoachingTips", () => {
   it("returns follower growth tips for low followers", () => {
     const data = makeData({ verifiedFollowers: 100 });
@@ -114,15 +191,62 @@ describe("getCoachingTips", () => {
     expect(tips.find((t) => t.id === "activity_critical")).toBeDefined();
   });
 
-  it("returns minimal tips when all metrics are good", () => {
+  it("returns reply rate tips when reply rate is low", () => {
     const data = makeData({
-      verifiedFollowers: 3000,
-      organicImpressions: 6_000_000,
-      tweetsLast30Days: 100,
-      avgViewsPerTweet: 5000,
+      tweetsLast90Days: 50,
+      replyRate: 0.001,
+      organicImpressions: 1_000_000,
     });
     const tips = getCoachingTips(data);
-    expect(tips.length).toBe(0);
+    expect(tips.find((t) => t.id === "reply_rate_low")).toBeDefined();
+  });
+
+  it("returns media tips when media usage is low", () => {
+    const data = makeData({
+      tweetsLast90Days: 50,
+      mediaTweetPercent: 10,
+    });
+    const tips = getCoachingTips(data);
+    expect(tips.find((t) => t.id === "media_low")).toBeDefined();
+  });
+
+  it("returns thread tips when thread count is low", () => {
+    const data = makeData({
+      threadCount: 0,
+      tweetsLast30Days: 30,
+    });
+    const tips = getCoachingTips(data);
+    expect(tips.find((t) => t.id === "threads_low")).toBeDefined();
+  });
+
+  it("returns verified % tip when low", () => {
+    const data = makeData({
+      totalFollowers: 1000,
+      verifiedFollowerPercent: 2,
+    });
+    const tips = getCoachingTips(data);
+    expect(tips.find((t) => t.id === "verified_pct_low")).toBeDefined();
+  });
+
+  it("returns peak hours tip when peak hours available", () => {
+    const data = makeData({
+      peakHours: [14, 17, 21],
+    });
+    const tips = getCoachingTips(data);
+    expect(tips.find((t) => t.id === "peak_hours")).toBeDefined();
+  });
+
+  it("includes estimated impact on tips where applicable", () => {
+    const data = makeData({
+      tweetsLast90Days: 50,
+      replyRate: 0.001,
+      organicImpressions: 3_000_000,
+      engagementRate: 0.02,
+    });
+    const tips = getCoachingTips(data);
+    const replyTip = tips.find((t) => t.id === "reply_rate_low");
+    expect(replyTip?.estimatedImpact).toBeDefined();
+    expect(replyTip?.estimatedImpact).toMatch(/^\+\$/);
   });
 
   it("sorts tips by priority (high first)", () => {
@@ -140,17 +264,6 @@ describe("getCoachingTips", () => {
       );
     }
   });
-
-  it("returns low engagement tip when avgViews < 100", () => {
-    const data = makeData({
-      verifiedFollowers: 3000,
-      organicImpressions: 6_000_000,
-      tweetsLast30Days: 100,
-      avgViewsPerTweet: 50,
-    });
-    const tips = getCoachingTips(data);
-    expect(tips.find((t) => t.id === "engagement_low")).toBeDefined();
-  });
 });
 
 describe("loadMonetizationData / saveMonetizationData", () => {
@@ -159,13 +272,43 @@ describe("loadMonetizationData / saveMonetizationData", () => {
     expect(result).toBeNull();
   });
 
-  it("round-trips data through save and load", async () => {
+  it("round-trips data through save and load (profile-keyed)", async () => {
     const data = makeData({
+      userId: "profile_1",
       verifiedFollowers: 1500,
       organicImpressions: 2_000_000,
     });
     await saveMonetizationData(data);
-    const loaded = await loadMonetizationData();
+    const loaded = await loadMonetizationData("profile_1");
     expect(loaded).toEqual(data);
+  });
+
+  it("stores separate data per profile", async () => {
+    const profile1 = makeData({
+      userId: "profile_a",
+      verifiedFollowers: 500,
+    });
+    const profile2 = makeData({
+      userId: "profile_b",
+      verifiedFollowers: 2000,
+    });
+    await saveMonetizationData(profile1);
+    await saveMonetizationData(profile2);
+
+    const loaded1 = await loadMonetizationData("profile_a");
+    const loaded2 = await loadMonetizationData("profile_b");
+    expect(loaded1?.verifiedFollowers).toBe(500);
+    expect(loaded2?.verifiedFollowers).toBe(2000);
+  });
+
+  it("falls back to legacy key when no profile-keyed data found", async () => {
+    const data = makeData({
+      userId: "legacy_user",
+      verifiedFollowers: 999,
+    });
+    await saveMonetizationData(data); // saves to both legacy and profile-keyed
+    // Loading without a userId falls back to legacy key
+    const loaded = await loadMonetizationData();
+    expect(loaded?.verifiedFollowers).toBe(999);
   });
 });

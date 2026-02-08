@@ -9,20 +9,23 @@ export function computeAuditCounts(
   users: UserProfile[],
   followerIds: Set<string>,
 ): AuditCounts {
-  const followingSet = new Set(users.map((u) => u.userId));
+  const followingUsers = users.filter((u) => u.isFollowing !== false);
+  const followerOnlyUsers = users.filter((u) => u.isFollowing === false);
 
   return {
-    total: users.length,
-    active: users.filter((u) => u.status === "active").length,
-    inactive: users.filter((u) => u.status === "inactive").length,
-    suspended: users.filter((u) => u.status === "suspended").length,
-    deactivated: users.filter((u) => u.status === "deactivated").length,
-    noTweets: users.filter((u) => u.status === "no_tweets").length,
-    errors: users.filter((u) => u.status === "error").length,
-    mutual: users.filter((u) => followerIds.has(u.userId)).length,
-    notFollowingBack: users.filter((u) => !followerIds.has(u.userId)).length,
-    notFollowedBack: [...followerIds].filter((id) => !followingSet.has(id))
+    total: followingUsers.length,
+    active: followingUsers.filter((u) => u.status === "active").length,
+    inactive: followingUsers.filter((u) => u.status === "inactive").length,
+    suspended: followingUsers.filter((u) => u.status === "suspended").length,
+    deactivated: followingUsers.filter((u) => u.status === "deactivated")
       .length,
+    noTweets: followingUsers.filter((u) => u.status === "no_tweets").length,
+    errors: followingUsers.filter((u) => u.status === "error").length,
+    mutual: followingUsers.filter((u) => followerIds.has(u.userId)).length,
+    notFollowingBack: followingUsers.filter((u) => !followerIds.has(u.userId))
+      .length,
+    notFollowedBack: followerOnlyUsers.length,
+    followersOnly: followerOnlyUsers.length,
   };
 }
 
@@ -31,7 +34,9 @@ export function computeAccountHealth(
   totalFollowers: number,
   followerIds: Set<string>,
 ): AccountHealth {
-  const total = users.length;
+  // Only consider users you follow for health scoring
+  const followingUsers = users.filter((u) => u.isFollowing !== false);
+  const total = followingUsers.length;
   if (total === 0) {
     return {
       score: 0,
@@ -42,20 +47,20 @@ export function computeAccountHealth(
     };
   }
 
-  const inactive = users.filter(
+  const inactive = followingUsers.filter(
     (u) =>
       u.status === "inactive" ||
       u.status === "suspended" ||
       u.status === "no_tweets",
   ).length;
-  const mutual = users.filter((u) => followerIds.has(u.userId)).length;
+  const mutual = followingUsers.filter((u) => followerIds.has(u.userId)).length;
 
   const followRatio = totalFollowers > 0 ? totalFollowers / total : 0;
   const inactivePercent = (inactive / total) * 100;
   const mutualPercent = (mutual / total) * 100;
 
   // Engagement potential: active users who follow back
-  const activeMutual = users.filter(
+  const activeMutual = followingUsers.filter(
     (u) => u.status === "active" && followerIds.has(u.userId),
   ).length;
   const engagementPotential = total > 0 ? (activeMutual / total) * 100 : 0;

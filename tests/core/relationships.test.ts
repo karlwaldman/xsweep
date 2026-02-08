@@ -33,8 +33,9 @@ describe("computeAuditCounts", () => {
     expect(counts.errors).toBe(1);
     expect(counts.mutual).toBe(3);
     expect(counts.notFollowingBack).toBe(4);
-    // notFollowedBack: followerIds not in our following list = none here since all 3 are in users
+    // notFollowedBack: no follower-only users since all users are isFollowing: true (default)
     expect(counts.notFollowedBack).toBe(0);
+    expect(counts.followersOnly).toBe(0);
   });
 
   it("handles empty users array", () => {
@@ -44,14 +45,19 @@ describe("computeAuditCounts", () => {
     expect(counts.mutual).toBe(0);
     expect(counts.notFollowingBack).toBe(0);
     expect(counts.notFollowedBack).toBe(0);
+    expect(counts.followersOnly).toBe(0);
   });
 
-  it("counts notFollowedBack for followers not in following list", () => {
-    const users = [makeUser({ userId: "1" })];
-    // Follower "99" is not in our following list
+  it("counts follower-only users (isFollowing === false)", () => {
+    const users = [
+      makeUser({ userId: "1", isFollowing: true }),
+      makeUser({ userId: "99", isFollowing: false }),
+    ];
     const followerIds = new Set(["1", "99"]);
 
     const counts = computeAuditCounts(users, followerIds);
+    expect(counts.total).toBe(1); // only following users
+    expect(counts.followersOnly).toBe(1);
     expect(counts.notFollowedBack).toBe(1);
   });
 });
