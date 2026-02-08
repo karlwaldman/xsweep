@@ -36,11 +36,11 @@ Select accounts to unfollow in bulk with a Gmail-style undo pattern — every un
 
 ![Mass Unfollow](docs/screenshots/unfollow.png)
 
-### Monetization Intelligence
+### Settings
 
-Track your X monetization eligibility, estimate payouts, and find your best posting times. No other follow-management tool offers this.
+Configure your Claude API key, export data, and manage your extension preferences.
 
-![Monetization Intelligence](docs/screenshots/monetization.png)
+![Settings](docs/screenshots/settings.png)
 
 ## Privacy
 
