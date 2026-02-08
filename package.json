@@ -2,8 +2,22 @@
   "name": "xsweep",
   "version": "0.1.0",
   "description": "Clean up your X. Organize who you follow with AI.",
-  "private": true,
+  "private": false,
   "type": "module",
+  "license": "MIT",
+  "author": "Karl Waldman",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karlwaldman/xsweep.git"
+  },
+  "keywords": [
+    "twitter",
+    "x",
+    "chrome-extension",
+    "unfollow",
+    "ai",
+    "wxt"
+  ],
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt --browser firefox",
