@@ -20,6 +20,17 @@ vi.mock("@/utils/rate-limiter", () => ({
 
 import { collectIds, hydrateUsers, fullScan, stopScan } from "@/core/scanner";
 
+/** Create a mock Response with both .json() and .text() */
+function mockResponse(body: unknown, status = 200, ok = true) {
+  const json = JSON.stringify(body);
+  return {
+    ok,
+    status,
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(json),
+  } as Response;
+}
+
 describe("collectIds", () => {
   beforeEach(() => {
     vi.mocked(getHeaders).mockReturnValue({
@@ -37,25 +48,13 @@ describe("collectIds", () => {
     globalThis.fetch = vi.fn(() => {
       callCount++;
       if (callCount === 1) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: () =>
-            Promise.resolve({
-              ids: ["1", "2", "3"],
-              next_cursor_str: "abc",
-            }),
-        } as Response);
+        return Promise.resolve(
+          mockResponse({ ids: ["1", "2", "3"], next_cursor_str: "abc" }),
+        );
       }
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            ids: ["4", "5"],
-            next_cursor_str: "0",
-          }),
-      } as Response);
+      return Promise.resolve(
+        mockResponse({ ids: ["4", "5"], next_cursor_str: "0" }),
+      );
     });
 
     const ids = await collectIds("friends/ids.json");
@@ -73,11 +72,9 @@ describe("collectIds", () => {
           statusText: "Too Many Requests",
         } as Response);
       }
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ ids: ["1"], next_cursor_str: "0" }),
-      } as Response);
+      return Promise.resolve(
+        mockResponse({ ids: ["1"], next_cursor_str: "0" }),
+      );
     });
 
     const ids = await collectIds("friends/ids.json");
@@ -87,11 +84,11 @@ describe("collectIds", () => {
   });
 
   it("stops when next_cursor_str is '0'", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ ids: ["1", "2"], next_cursor_str: "0" }),
-    } as Response);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        mockResponse({ ids: ["1", "2"], next_cursor_str: "0" }),
+      );
 
     const ids = await collectIds("friends/ids.json");
     expect(ids).toEqual(["1", "2"]);
@@ -99,11 +96,9 @@ describe("collectIds", () => {
   });
 
   it("calls onProgress callback with correct phase", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ ids: ["1"], next_cursor_str: "0" }),
-    } as Response);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ ids: ["1"], next_cursor_str: "0" }));
 
     const onProgress = vi.fn();
     await collectIds("friends/ids.json", onProgress);
@@ -124,11 +119,9 @@ describe("collectIds", () => {
       return Promise.resolve();
     });
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ ids: ["1"], next_cursor_str: "abc" }),
-    } as Response);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ ids: ["1"], next_cursor_str: "abc" }));
 
     const ids = await collectIds("friends/ids.json");
     // Only first page collected before abort kicks in
@@ -150,28 +143,25 @@ describe("hydrateUsers", () => {
 
   it("processes users and creates UserProfile objects", async () => {
     const recentDate = new Date(Date.now() - 86400000 * 5).toUTCString(); // 5 days ago
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          users: [
-            {
-              id_str: "1",
-              screen_name: "alice",
-              name: "Alice",
-              description: "Hello world",
-              followers_count: 100,
-              friends_count: 50,
-              statuses_count: 500,
-              status: { created_at: recentDate },
-              verified: false,
-              profile_image_url_https: "https://img.com/alice.jpg",
-            },
-          ],
-          next_cursor_str: "0",
-        }),
-    } as Response);
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      mockResponse({
+        users: [
+          {
+            id_str: "1",
+            screen_name: "alice",
+            name: "Alice",
+            description: "Hello world",
+            followers_count: 100,
+            friends_count: 50,
+            statuses_count: 500,
+            status: { created_at: recentDate },
+            verified: false,
+            profile_image_url_https: "https://img.com/alice.jpg",
+          },
+        ],
+        next_cursor_str: "0",
+      }),
+    );
 
     const users = await hydrateUsers("friends/list.json", new Set(["1"]));
 
@@ -186,25 +176,22 @@ describe("hydrateUsers", () => {
     let callCount = 0;
     globalThis.fetch = vi.fn(() => {
       callCount++;
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            users: [
-              {
-                id_str: "1",
-                screen_name: "same",
-                name: "Same User",
-                description: "",
-                followers_count: 0,
-                friends_count: 0,
-                statuses_count: 0,
-              },
-            ],
-            next_cursor_str: String(callCount + 1),
-          }),
-      } as Response);
+      return Promise.resolve(
+        mockResponse({
+          users: [
+            {
+              id_str: "1",
+              screen_name: "same",
+              name: "Same User",
+              description: "",
+              followers_count: 0,
+              friends_count: 0,
+              statuses_count: 0,
+            },
+          ],
+          next_cursor_str: String(callCount + 1),
+        }),
+      );
     });
 
     await hydrateUsers("friends/list.json", new Set(["1"]));
@@ -217,25 +204,22 @@ describe("hydrateUsers", () => {
     let callCount = 0;
     globalThis.fetch = vi.fn(() => {
       callCount++;
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            users: [
-              {
-                id_str: String(callCount * 100),
-                screen_name: `user${callCount}`,
-                name: `User ${callCount}`,
-                description: "",
-                followers_count: 0,
-                friends_count: 0,
-                statuses_count: 0,
-              },
-            ],
-            next_cursor_str: String(callCount + 1),
-          }),
-      } as Response);
+      return Promise.resolve(
+        mockResponse({
+          users: [
+            {
+              id_str: String(callCount * 100),
+              screen_name: `user${callCount}`,
+              name: `User ${callCount}`,
+              description: "",
+              followers_count: 0,
+              friends_count: 0,
+              statuses_count: 0,
+            },
+          ],
+          next_cursor_str: String(callCount + 1),
+        }),
+      );
     });
 
     await hydrateUsers("friends/list.json", new Set());
@@ -244,25 +228,22 @@ describe("hydrateUsers", () => {
   });
 
   it("creates placeholder profiles for IDs not returned by API", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          users: [
-            {
-              id_str: "1",
-              screen_name: "alice",
-              name: "Alice",
-              description: "",
-              followers_count: 0,
-              friends_count: 0,
-              statuses_count: 0,
-            },
-          ],
-          next_cursor_str: "0",
-        }),
-    } as Response);
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      mockResponse({
+        users: [
+          {
+            id_str: "1",
+            screen_name: "alice",
+            name: "Alice",
+            description: "",
+            followers_count: 0,
+            friends_count: 0,
+            statuses_count: 0,
+          },
+        ],
+        next_cursor_str: "0",
+      }),
+    );
 
     const users = await hydrateUsers(
       "friends/list.json",
@@ -280,55 +261,52 @@ describe("hydrateUsers", () => {
     const oldDate = new Date(Date.now() - 86400000 * 400).toUTCString();
     const recentDate = new Date(Date.now() - 86400000 * 5).toUTCString();
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          users: [
-            {
-              id_str: "1",
-              screen_name: "active_user",
-              name: "Active",
-              description: "",
-              followers_count: 0,
-              friends_count: 0,
-              statuses_count: 100,
-              status: { created_at: recentDate },
-            },
-            {
-              id_str: "2",
-              screen_name: "inactive_user",
-              name: "Inactive",
-              description: "",
-              followers_count: 0,
-              friends_count: 0,
-              statuses_count: 100,
-              status: { created_at: oldDate },
-            },
-            {
-              id_str: "3",
-              screen_name: "suspended_user",
-              name: "Suspended",
-              description: "",
-              followers_count: 0,
-              friends_count: 0,
-              statuses_count: 0,
-              suspended: true,
-            },
-            {
-              id_str: "4",
-              screen_name: "no_tweets_user",
-              name: "NoTweets",
-              description: "",
-              followers_count: 0,
-              friends_count: 0,
-              statuses_count: 0,
-            },
-          ],
-          next_cursor_str: "0",
-        }),
-    } as Response);
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      mockResponse({
+        users: [
+          {
+            id_str: "1",
+            screen_name: "active_user",
+            name: "Active",
+            description: "",
+            followers_count: 0,
+            friends_count: 0,
+            statuses_count: 100,
+            status: { created_at: recentDate },
+          },
+          {
+            id_str: "2",
+            screen_name: "inactive_user",
+            name: "Inactive",
+            description: "",
+            followers_count: 0,
+            friends_count: 0,
+            statuses_count: 100,
+            status: { created_at: oldDate },
+          },
+          {
+            id_str: "3",
+            screen_name: "suspended_user",
+            name: "Suspended",
+            description: "",
+            followers_count: 0,
+            friends_count: 0,
+            statuses_count: 0,
+            suspended: true,
+          },
+          {
+            id_str: "4",
+            screen_name: "no_tweets_user",
+            name: "NoTweets",
+            description: "",
+            followers_count: 0,
+            friends_count: 0,
+            statuses_count: 0,
+          },
+        ],
+        next_cursor_str: "0",
+      }),
+    );
 
     const users = await hydrateUsers(
       "friends/list.json",
@@ -342,25 +320,22 @@ describe("hydrateUsers", () => {
   });
 
   it("calls onBatch callback with each batch", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          users: [
-            {
-              id_str: "1",
-              screen_name: "alice",
-              name: "Alice",
-              description: "",
-              followers_count: 0,
-              friends_count: 0,
-              statuses_count: 0,
-            },
-          ],
-          next_cursor_str: "0",
-        }),
-    } as Response);
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      mockResponse({
+        users: [
+          {
+            id_str: "1",
+            screen_name: "alice",
+            name: "Alice",
+            description: "",
+            followers_count: 0,
+            friends_count: 0,
+            statuses_count: 0,
+          },
+        ],
+        next_cursor_str: "0",
+      }),
+    );
 
     const onBatch = vi.fn();
     await hydrateUsers("friends/list.json", new Set(["1"]), undefined, onBatch);
@@ -388,46 +363,37 @@ describe("fullScan", () => {
     globalThis.fetch = vi.fn(() => {
       callCount++;
       if (callCount <= 2) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: () =>
-            Promise.resolve({
-              ids: ["1", "2"],
-              next_cursor_str: "0",
-            }),
-        } as Response);
+        return Promise.resolve(
+          mockResponse({ ids: ["1", "2"], next_cursor_str: "0" }),
+        );
       }
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            users: [
-              {
-                id_str: "1",
-                screen_name: "alice",
-                name: "Alice",
-                description: "",
-                followers_count: 10,
-                friends_count: 5,
-                statuses_count: 100,
-                status: { created_at: new Date().toUTCString() },
-              },
-              {
-                id_str: "2",
-                screen_name: "bob",
-                name: "Bob",
-                description: "",
-                followers_count: 20,
-                friends_count: 10,
-                statuses_count: 200,
-                status: { created_at: new Date().toUTCString() },
-              },
-            ],
-            next_cursor_str: "0",
-          }),
-      } as Response);
+      return Promise.resolve(
+        mockResponse({
+          users: [
+            {
+              id_str: "1",
+              screen_name: "alice",
+              name: "Alice",
+              description: "",
+              followers_count: 10,
+              friends_count: 5,
+              statuses_count: 100,
+              status: { created_at: new Date().toUTCString() },
+            },
+            {
+              id_str: "2",
+              screen_name: "bob",
+              name: "Bob",
+              description: "",
+              followers_count: 20,
+              friends_count: 10,
+              statuses_count: 200,
+              status: { created_at: new Date().toUTCString() },
+            },
+          ],
+          next_cursor_str: "0",
+        }),
+      );
     });
 
     const result = await fullScan();
@@ -442,50 +408,42 @@ describe("fullScan", () => {
     globalThis.fetch = vi.fn(() => {
       callCount++;
       if (callCount === 1) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: () =>
-            Promise.resolve({ ids: ["1", "2"], next_cursor_str: "0" }),
-        } as Response);
+        return Promise.resolve(
+          mockResponse({ ids: ["1", "2"], next_cursor_str: "0" }),
+        );
       }
       if (callCount === 2) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: () => Promise.resolve({ ids: ["1"], next_cursor_str: "0" }),
-        } as Response);
+        return Promise.resolve(
+          mockResponse({ ids: ["1"], next_cursor_str: "0" }),
+        );
       }
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            users: [
-              {
-                id_str: "1",
-                screen_name: "alice",
-                name: "Alice",
-                description: "",
-                followers_count: 0,
-                friends_count: 0,
-                statuses_count: 10,
-                status: { created_at: new Date().toUTCString() },
-              },
-              {
-                id_str: "2",
-                screen_name: "bob",
-                name: "Bob",
-                description: "",
-                followers_count: 0,
-                friends_count: 0,
-                statuses_count: 10,
-                status: { created_at: new Date().toUTCString() },
-              },
-            ],
-            next_cursor_str: "0",
-          }),
-      } as Response);
+      return Promise.resolve(
+        mockResponse({
+          users: [
+            {
+              id_str: "1",
+              screen_name: "alice",
+              name: "Alice",
+              description: "",
+              followers_count: 0,
+              friends_count: 0,
+              statuses_count: 10,
+              status: { created_at: new Date().toUTCString() },
+            },
+            {
+              id_str: "2",
+              screen_name: "bob",
+              name: "Bob",
+              description: "",
+              followers_count: 0,
+              friends_count: 0,
+              statuses_count: 10,
+              status: { created_at: new Date().toUTCString() },
+            },
+          ],
+          next_cursor_str: "0",
+        }),
+      );
     });
 
     const result = await fullScan();
@@ -517,11 +475,9 @@ describe("stopScan", () => {
       return Promise.resolve();
     });
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ ids: ["1"], next_cursor_str: "abc" }),
-    } as Response);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ ids: ["1"], next_cursor_str: "abc" }));
 
     const ids = await collectIds("friends/ids.json");
     expect(ids).toEqual(["1"]);
