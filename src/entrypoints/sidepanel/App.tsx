@@ -2,13 +2,24 @@ import { useState, useEffect, useCallback } from "react";
 import Dashboard from "./pages/Dashboard";
 import Audit from "./pages/Audit";
 import Lists from "./pages/Lists";
+import Review from "./pages/Review";
 import Unfollow from "./pages/Unfollow";
 import Settings from "./pages/Settings";
 
-type Page = "dashboard" | "audit" | "lists" | "unfollow" | "settings";
+type Page =
+  | "dashboard"
+  | "audit"
+  | "lists"
+  | "review"
+  | "unfollow"
+  | "settings";
 
 export interface NavigationParams {
   auditFilter?: string;
+  followerMin?: number;
+  followerMax?: number;
+  sortBy?: string;
+  sortDesc?: boolean;
 }
 
 export interface UnfollowProgress {
@@ -27,6 +38,7 @@ const navItems: Array<{ id: Page; label: string; icon: string }> = [
   { id: "dashboard", label: "Dashboard", icon: "📊" },
   { id: "audit", label: "Audit", icon: "🔍" },
   { id: "lists", label: "Lists", icon: "📋" },
+  { id: "review", label: "Review", icon: "🎯" },
   { id: "unfollow", label: "Unfollow", icon: "🧹" },
   { id: "settings", label: "Settings", icon: "⚙️" },
 ];
@@ -137,11 +149,18 @@ export default function App() {
         {page === "audit" && (
           <Audit
             initialFilter={navParams.auditFilter}
+            initialFollowerMin={navParams.followerMin}
+            initialFollowerMax={navParams.followerMax}
+            initialSort={navParams.sortBy}
+            initialSortDesc={navParams.sortDesc}
             navigateTo={navigateTo}
             showToast={showToast}
           />
         )}
         {page === "lists" && <Lists showToast={showToast} />}
+        {page === "review" && (
+          <Review navigateTo={navigateTo} showToast={showToast} />
+        )}
         {page === "unfollow" && (
           <Unfollow navigateTo={navigateTo} showToast={showToast} />
         )}

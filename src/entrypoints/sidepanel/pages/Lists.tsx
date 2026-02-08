@@ -3,13 +3,17 @@ import {
   getAllLists,
   createList,
   deleteList,
+  updateList,
   getAllUsers,
   getUsersByListId,
   updateUserListIds,
   getListByXListId,
   upsertUsers,
 } from "../../../storage/db";
-import { batchCategorizeByKeywords } from "../../../core/categorizer";
+import {
+  batchCategorizeByKeywords,
+  categorizeByKeywords,
+} from "../../../core/categorizer";
 import type { SmartList, UserProfile } from "../../../core/types";
 import type { ShowToastFn } from "../App";
 
@@ -45,6 +49,11 @@ export default function Lists({ showToast }: Props) {
   const [xLists, setXLists] = useState<XListPreview[]>([]);
   const [importing, setImporting] = useState<string | null>(null);
   const [loadingXLists, setLoadingXLists] = useState(false);
+  const [editingList, setEditingList] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editKeywords, setEditKeywords] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [resyncing, setResyncing] = useState<number | null>(null);
 
   useEffect(() => {
     loadLists();
@@ -314,6 +323,152 @@ export default function Lists({ showToast }: Props) {
     chrome.runtime.onMessage.addListener(listener);
   }
 
+  function startEditing(list: ListWithUsers) {
+    setEditingList(list.id!);
+    setEditName(list.name);
+    setEditKeywords(list.keywords.join(", "));
+    setEditDescription(list.description);
+  }
+
+  async function handleSaveEdit(id: number) {
+    const name = editName.trim();
+    if (!name) return;
+
+    await updateList(id, {
+      name,
+      description: editDescription.trim(),
+      keywords: editKeywords
+        .split(",")
+        .map((k) => k.trim().toLowerCase())
+        .filter(Boolean),
+      updatedAt: new Date().toISOString(),
+    });
+
+    setEditingList(null);
+    await loadLists();
+    showToast(`Updated "${name}"`);
+  }
+
+  async function handleRescanList(list: ListWithUsers) {
+    if (list.type !== "keyword" || !list.id) return;
+
+    setCategorizing(true);
+    const users = await getAllUsers();
+    if (users.length === 0) {
+      showToast("No scanned users. Run a scan from Dashboard first.");
+      setCategorizing(false);
+      return;
+    }
+
+    // Clear existing list assignments for this list
+    for (const u of list.users) {
+      await updateUserListIds(
+        u.userId,
+        u.listIds.filter((lid) => lid !== list.id),
+      );
+    }
+
+    // Re-categorize against just this list
+    let matched = 0;
+    for (const user of users) {
+      const matchedIds = categorizeByKeywords(user, [list]);
+      if (matchedIds.length > 0) {
+        const newListIds = [...new Set([...user.listIds, ...matchedIds])];
+        await updateUserListIds(user.userId, newListIds);
+        matched++;
+      }
+    }
+
+    setCategorizing(false);
+    await loadLists();
+    showToast(`Re-scanned "${list.name}": ${matched} matches`);
+  }
+
+  async function handleResyncList(list: ListWithUsers) {
+    if (!list.xListId || !list.id) return;
+
+    setResyncing(list.id);
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (!tab?.url?.includes("x.com") || !tab?.id) {
+        showToast("Navigate to x.com first");
+        setResyncing(null);
+        return;
+      }
+
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        type: "FETCH_X_LIST_MEMBERS",
+        listId: list.xListId,
+      });
+
+      if (!response?.success) {
+        showToast(response?.error || "Failed to fetch members");
+        setResyncing(null);
+        return;
+      }
+
+      const members = response.members || [];
+
+      // Remove old list assignments
+      for (const u of list.users) {
+        await updateUserListIds(
+          u.userId,
+          u.listIds.filter((lid) => lid !== list.id),
+        );
+      }
+
+      // Re-assign members
+      const allUsers = await getAllUsers();
+      const existingUserIds = new Set(allUsers.map((u) => u.userId));
+      const newUsers: UserProfile[] = [];
+
+      for (const m of members) {
+        if (existingUserIds.has(m.userId)) {
+          const user = allUsers.find((u) => u.userId === m.userId);
+          if (user) {
+            const updatedIds = [...new Set([...user.listIds, list.id!])];
+            await updateUserListIds(m.userId, updatedIds);
+          }
+        } else {
+          newUsers.push({
+            userId: m.userId,
+            username: m.username,
+            displayName: m.displayName,
+            bio: "",
+            followerCount: 0,
+            followingCount: 0,
+            tweetCount: 0,
+            lastTweetDate: null,
+            daysSinceLastTweet: null,
+            status: "active",
+            isFollower: false,
+            isMutual: false,
+            isVerified: false,
+            listIds: [list.id!],
+            scannedAt: new Date().toISOString(),
+            profileImageUrl: m.profileImageUrl,
+          });
+        }
+      }
+
+      if (newUsers.length > 0) {
+        await upsertUsers(newUsers);
+      }
+
+      await updateList(list.id, { updatedAt: new Date().toISOString() });
+      await loadLists();
+      showToast(`Re-synced "${list.name}": ${members.length} members`);
+    } catch (e) {
+      showToast(
+        `Re-sync failed: ${e instanceof Error ? e.message : "unknown"}`,
+      );
+    }
+    setResyncing(null);
+  }
+
   async function handleDeleteList(id: number, name: string) {
     await deleteList(id);
     await loadLists();
@@ -564,33 +719,88 @@ export default function Lists({ showToast }: Props) {
 
               {expandedList === list.id && (
                 <div className="border-t border-x-border px-3 pb-3">
-                  {list.type === "keyword" && list.keywords.length > 0 && (
-                    <div className="flex flex-wrap gap-1 py-2">
-                      {list.keywords.map((k) => (
-                        <span
-                          key={k}
-                          className="text-[10px] bg-x-border px-1.5 py-0.5 rounded"
+                  {/* Edit form */}
+                  {editingList === list.id ? (
+                    <div className="space-y-2 py-2">
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        placeholder="List name"
+                        className="w-full bg-x-bg border border-x-border rounded-lg px-3 py-1.5 text-sm text-x-text placeholder-x-text-secondary focus:border-x-accent focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={editDescription}
+                        onChange={(e) => setEditDescription(e.target.value)}
+                        placeholder="Description"
+                        className="w-full bg-x-bg border border-x-border rounded-lg px-3 py-1.5 text-sm text-x-text placeholder-x-text-secondary focus:border-x-accent focus:outline-none"
+                      />
+                      {list.type === "keyword" && (
+                        <input
+                          type="text"
+                          value={editKeywords}
+                          onChange={(e) => setEditKeywords(e.target.value)}
+                          placeholder="Keywords (comma-separated)"
+                          className="w-full bg-x-bg border border-x-border rounded-lg px-3 py-1.5 text-sm text-x-text placeholder-x-text-secondary focus:border-x-accent focus:outline-none"
+                        />
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleSaveEdit(list.id!)}
+                          disabled={!editName.trim()}
+                          className="px-3 py-1 bg-x-accent text-white rounded-full text-xs font-medium hover:bg-x-accent-hover disabled:opacity-50 transition-colors"
                         >
-                          {k}
-                        </span>
-                      ))}
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setEditingList(null)}
+                          className="px-3 py-1 bg-x-border text-x-text rounded-full text-xs hover:bg-x-card transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      {/* Description */}
+                      {list.description && (
+                        <div className="text-[10px] text-x-text-secondary py-1.5">
+                          {list.description}
+                        </div>
+                      )}
+
+                      {/* Keywords display */}
+                      {list.type === "keyword" && list.keywords.length > 0 && (
+                        <div className="flex flex-wrap gap-1 py-2">
+                          {list.keywords.map((k) => (
+                            <span
+                              key={k}
+                              className="text-[10px] bg-x-border px-1.5 py-0.5 rounded"
+                            >
+                              {k}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {list.type === "ai" && (
+                        <div className="py-2">
+                          <button
+                            onClick={() => handleRunAI(list.id!)}
+                            disabled={categorizing}
+                            className="text-xs text-x-accent hover:text-x-accent-hover disabled:opacity-50"
+                          >
+                            {categorizing
+                              ? "Running AI..."
+                              : "Run AI categorization"}
+                          </button>
+                        </div>
+                      )}
+                    </>
                   )}
 
-                  {list.type === "ai" && (
-                    <div className="py-2">
-                      <button
-                        onClick={() => handleRunAI(list.id!)}
-                        disabled={categorizing}
-                        className="text-xs text-x-accent hover:text-x-accent-hover disabled:opacity-50"
-                      >
-                        {categorizing
-                          ? "Running AI..."
-                          : "Run AI categorization"}
-                      </button>
-                    </div>
-                  )}
-
+                  {/* Members list */}
                   <div className="space-y-1 max-h-48 overflow-y-auto">
                     {list.users.slice(0, 20).map((user) => (
                       <div
@@ -621,24 +831,59 @@ export default function Lists({ showToast }: Props) {
                         ...and {list.users.length - 20} more
                       </div>
                     )}
+                    {list.users.length === 0 && (
+                      <div className="text-xs text-x-text-secondary py-2 text-center">
+                        No members yet.
+                        {list.type === "keyword" &&
+                          " Try editing keywords or re-scanning."}
+                        {list.type === "imported" && " Try re-syncing from X."}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex gap-2 pt-2 border-t border-x-border mt-2">
-                    {list.xListId && (
-                      <a
-                        href={`https://x.com/i/lists/${list.xListId}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-x-accent hover:underline"
+                  {/* Action buttons */}
+                  <div className="flex flex-wrap gap-2 pt-2 border-t border-x-border mt-2">
+                    <button
+                      onClick={() => startEditing(list)}
+                      className="text-xs text-x-accent hover:text-x-accent-hover"
+                    >
+                      Edit
+                    </button>
+                    {list.type === "keyword" && (
+                      <button
+                        onClick={() => handleRescanList(list)}
+                        disabled={categorizing}
+                        className="text-xs text-x-accent hover:text-x-accent-hover disabled:opacity-50"
                       >
-                        View on X
-                      </a>
+                        {categorizing ? "Scanning..." : "Re-scan"}
+                      </button>
+                    )}
+                    {list.xListId && (
+                      <>
+                        <button
+                          onClick={() => handleResyncList(list)}
+                          disabled={resyncing === list.id}
+                          className="text-xs text-x-accent hover:text-x-accent-hover disabled:opacity-50"
+                        >
+                          {resyncing === list.id
+                            ? "Syncing..."
+                            : "Re-sync from X"}
+                        </button>
+                        <a
+                          href={`https://x.com/i/lists/${list.xListId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-x-accent hover:underline"
+                        >
+                          View on X
+                        </a>
+                      </>
                     )}
                     <button
                       onClick={() => handleDeleteList(list.id!, list.name)}
                       className="text-xs text-x-red hover:text-red-400"
                     >
-                      Delete list
+                      Delete
                     </button>
                   </div>
                 </div>

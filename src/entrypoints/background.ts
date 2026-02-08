@@ -80,7 +80,10 @@ export default defineBackground(() => {
       message.type === "UNFOLLOW_STARTED" ||
       message.type === "UNFOLLOW_PROGRESS" ||
       message.type === "UNFOLLOW_COMPLETE" ||
-      message.type === "AUTH_STATUS"
+      message.type === "AUTH_STATUS" ||
+      message.type === "MONETIZATION_PROGRESS" ||
+      message.type === "MONETIZATION_COMPLETE" ||
+      message.type === "MONETIZATION_ERROR"
     ) {
       // Broadcast to all extension pages (side panel will pick it up)
       chrome.runtime.sendMessage(message).catch(() => {

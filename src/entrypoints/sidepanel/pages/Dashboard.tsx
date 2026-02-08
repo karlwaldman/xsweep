@@ -12,6 +12,15 @@ import {
   getHealthGrade,
   getRecommendations,
 } from "../../../core/health-recommendations";
+import {
+  loadMonetizationData,
+  saveMonetizationData,
+  getRequirements,
+  getCoachingTips,
+} from "../../../core/monetization";
+import type { MonetizationData } from "../../../core/monetization";
+import { formatCount } from "../../../utils/format";
+import { computeQuickStats, type QuickStats } from "../../../core/reviewer";
 import type {
   AuditCounts,
   AccountHealth,
@@ -40,12 +49,26 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [monetization, setMonetization] = useState<MonetizationData | null>(
+    null,
+  );
+  const [monetizationScanning, setMonetizationScanning] = useState(false);
+  const [monetizationProgress, setMonetizationProgress] = useState<{
+    phase: "followers" | "tweets";
+    done: number;
+    total: number;
+  } | null>(null);
+  const [monetizationError, setMonetizationError] = useState<string | null>(
+    null,
+  );
+  const [quickStats, setQuickStats] = useState<QuickStats | null>(null);
 
   useEffect(() => {
     loadData();
+    loadMonetizationData().then(setMonetization);
     const listener = (message: {
       type: string;
-      data?: ScanProgress;
+      data?: ScanProgress & Record<string, unknown>;
       error?: string;
     }) => {
       if (message.type === "SCAN_COMPLETE") {
@@ -55,13 +78,49 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
       }
       if (message.type === "SCAN_PROGRESS" && message.data) {
         setScanning(true);
-        setScanProgress(message.data);
+        setScanProgress(message.data as ScanProgress);
         setScanError(null);
       }
       if (message.type === "SCAN_ERROR") {
         setScanning(false);
         setScanProgress(null);
         setScanError(message.error || "Scan failed");
+      }
+      if (message.type === "MONETIZATION_PROGRESS" && message.data) {
+        setMonetizationProgress(
+          message.data as {
+            phase: "followers" | "tweets";
+            done: number;
+            total: number;
+          },
+        );
+      }
+      if (message.type === "MONETIZATION_COMPLETE" && message.data) {
+        const d = message.data as {
+          verifiedFollowers: number;
+          totalFollowers: number;
+          organicImpressions: number;
+          impressionsAvailable: boolean;
+          tweetsLast30Days: number;
+          tweetsLast90Days: number;
+          avgViewsPerTweet: number;
+          topTweetViews: number;
+        };
+        const updated: MonetizationData = {
+          ...d,
+          manualImpressions: monetization?.manualImpressions ?? 0,
+          identityVerified: monetization?.identityVerified ?? false,
+          lastChecked: new Date().toISOString(),
+        };
+        saveMonetizationData(updated);
+        setMonetization(updated);
+        setMonetizationScanning(false);
+        setMonetizationProgress(null);
+      }
+      if (message.type === "MONETIZATION_ERROR") {
+        setMonetizationScanning(false);
+        setMonetizationProgress(null);
+        setMonetizationError(message.error || "Monetization scan failed");
       }
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -85,6 +144,7 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
 
     const auditCounts = computeAuditCounts(users, followerIds);
     setCounts(auditCounts);
+    setQuickStats(computeQuickStats(users));
 
     const accountHealth = computeAccountHealth(
       users,
@@ -121,6 +181,41 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
     if (tab?.id) {
       chrome.tabs.sendMessage(tab.id, { type: "START_SCAN" });
     }
+  }
+
+  async function startMonetizationScan() {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (!tab?.url?.includes("x.com")) {
+      setMonetizationError("Navigate to x.com first.");
+      return;
+    }
+    setMonetizationError(null);
+    setMonetizationScanning(true);
+    setMonetizationProgress(null);
+    if (tab?.id) {
+      chrome.tabs.sendMessage(tab.id, { type: "SCAN_MONETIZATION" });
+    }
+  }
+
+  async function toggleIdentityVerified() {
+    if (!monetization) return;
+    const updated = {
+      ...monetization,
+      identityVerified: !monetization.identityVerified,
+    };
+    await saveMonetizationData(updated);
+    setMonetization(updated);
+  }
+
+  async function updateManualImpressions(value: string) {
+    if (!monetization) return;
+    const num = parseInt(value.replace(/[^0-9]/g, ""), 10) || 0;
+    const updated = { ...monetization, manualImpressions: num };
+    await saveMonetizationData(updated);
+    setMonetization(updated);
   }
 
   function handleRecommendationClick(rec: Recommendation) {
@@ -237,6 +332,17 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
         </div>
       )}
 
+      {/* Monetization Card */}
+      <MonetizationCard
+        data={monetization}
+        scanning={monetizationScanning}
+        progress={monetizationProgress}
+        error={monetizationError}
+        onCheckProgress={startMonetizationScan}
+        onToggleIdentity={toggleIdentityVerified}
+        onUpdateImpressions={updateManualImpressions}
+      />
+
       {/* Stat Cards */}
       <div className="grid grid-cols-2 gap-3">
         <StatCard
@@ -279,6 +385,120 @@ export default function Dashboard({ navigateTo, showToast }: Props) {
           onClick={() => navigateTo("audit", { auditFilter: "no_tweets" })}
         />
       </div>
+
+      {/* Quick Stats — Clickable tier & activity badges */}
+      {quickStats && (
+        <div className="bg-x-card rounded-xl p-4 space-y-3">
+          <h3 className="text-sm font-semibold">Quick Stats</h3>
+
+          <div>
+            <div className="text-[10px] text-x-text-secondary mb-1">
+              By Follower Tier
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <ClickableBadge
+                label="Mega (100K+)"
+                count={quickStats.tiers.mega}
+                color="text-x-accent"
+                onClick={() =>
+                  navigateTo("audit", {
+                    followerMin: 100000,
+                    sortBy: "followerCount",
+                    sortDesc: true,
+                  })
+                }
+              />
+              <ClickableBadge
+                label="Large (10K+)"
+                count={quickStats.tiers.large}
+                color="text-x-accent"
+                onClick={() =>
+                  navigateTo("audit", {
+                    followerMin: 10000,
+                    followerMax: 99999,
+                    sortBy: "followerCount",
+                    sortDesc: true,
+                  })
+                }
+              />
+              <ClickableBadge
+                label="Mid (1K+)"
+                count={quickStats.tiers.mid}
+                color="text-x-text"
+                onClick={() =>
+                  navigateTo("audit", {
+                    followerMin: 1000,
+                    followerMax: 9999,
+                    sortBy: "followerCount",
+                    sortDesc: true,
+                  })
+                }
+              />
+              <ClickableBadge
+                label="Small (100+)"
+                count={quickStats.tiers.small}
+                color="text-x-text-secondary"
+                onClick={() =>
+                  navigateTo("audit", {
+                    followerMin: 100,
+                    followerMax: 999,
+                    sortBy: "followerCount",
+                    sortDesc: true,
+                  })
+                }
+              />
+              <ClickableBadge
+                label="Micro (<100)"
+                count={quickStats.tiers.micro}
+                color="text-x-text-secondary"
+                onClick={() =>
+                  navigateTo("audit", {
+                    followerMax: 99,
+                    sortBy: "followerCount",
+                    sortDesc: true,
+                  })
+                }
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] text-x-text-secondary mb-1">
+              By Activity
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <ClickableBadge
+                label="Active"
+                count={quickStats.activity.active}
+                color="text-x-green"
+                onClick={() => navigateTo("audit", { auditFilter: "active" })}
+              />
+              <ClickableBadge
+                label="Inactive (1y+)"
+                count={quickStats.activity.inactive}
+                color="text-x-yellow"
+                onClick={() => navigateTo("audit", { auditFilter: "inactive" })}
+              />
+              <ClickableBadge
+                label="Ghost"
+                count={quickStats.activity.ghost}
+                color="text-x-orange"
+                onClick={() =>
+                  navigateTo("audit", { auditFilter: "no_tweets" })
+                }
+              />
+              <ClickableBadge
+                label="Suspended"
+                count={quickStats.activity.suspended}
+                color="text-x-red"
+                onClick={() =>
+                  navigateTo("audit", { auditFilter: "suspended" })
+                }
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions */}
       {(counts.inactive > 0 || counts.suspended > 0 || lists.length === 0) && (
@@ -419,6 +639,294 @@ function ScanProgressBar({ progress }: { progress: ScanProgress }) {
   );
 }
 
+function MonetizationCard({
+  data,
+  scanning,
+  progress,
+  error,
+  onCheckProgress,
+  onToggleIdentity,
+  onUpdateImpressions,
+}: {
+  data: MonetizationData | null;
+  scanning: boolean;
+  progress: {
+    phase: "followers" | "tweets";
+    done: number;
+    total: number;
+  } | null;
+  error: string | null;
+  onCheckProgress: () => void;
+  onToggleIdentity: () => void;
+  onUpdateImpressions: (value: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(!data);
+
+  // If scanning, always show expanded
+  const isExpanded = expanded || scanning;
+
+  if (!data && !scanning) {
+    // Collapsed state — no data yet
+    return (
+      <div className="bg-x-card rounded-xl p-4">
+        <button
+          onClick={onCheckProgress}
+          className="w-full flex items-center justify-between"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-lg">&#x1F4B0;</span>
+            <span className="text-sm font-semibold">Creator Monetization</span>
+          </div>
+          <span className="text-xs text-x-accent font-medium">
+            Check Progress
+          </span>
+        </button>
+        {error && <p className="text-x-red text-xs mt-2">{error}</p>}
+      </div>
+    );
+  }
+
+  const requirements = data ? getRequirements(data) : [];
+  const tips = data ? getCoachingTips(data) : [];
+  const metCount = requirements.filter((r) => r.met).length;
+  const timeAgo = data?.lastChecked ? getRelativeTime(data.lastChecked) : null;
+
+  return (
+    <div className="bg-x-card rounded-xl p-4">
+      <button
+        onClick={() => setExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between mb-1"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-lg">&#x1F4B0;</span>
+          <span className="text-sm font-semibold">Creator Monetization</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-x-text-secondary">
+            {metCount}/{requirements.length}
+          </span>
+          <span className="text-xs text-x-text-secondary">
+            {isExpanded ? "\u25B2" : "\u25BC"}
+          </span>
+        </div>
+      </button>
+
+      {timeAgo && (
+        <div className="text-[10px] text-x-text-secondary mb-3">
+          Last checked: {timeAgo}
+        </div>
+      )}
+
+      {isExpanded && (
+        <div className="space-y-3">
+          {/* Progress bars for each requirement */}
+          {scanning && progress ? (
+            <div className="space-y-2">
+              <div className="text-xs font-medium">
+                {progress.phase === "followers"
+                  ? "Scanning followers..."
+                  : "Scanning tweets..."}
+              </div>
+              <div className="w-full bg-x-border rounded-full h-1.5">
+                <div
+                  className="h-1.5 rounded-full bg-x-accent transition-all duration-300"
+                  style={{
+                    width: `${progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 10}%`,
+                  }}
+                />
+              </div>
+              <div className="text-[10px] text-x-text-secondary">
+                {progress.done.toLocaleString()} processed
+              </div>
+            </div>
+          ) : (
+            <>
+              {requirements.map((req) => (
+                <RequirementRow
+                  key={req.id}
+                  req={req}
+                  isIdentityToggle={req.id === "identity_verified"}
+                  onToggle={onToggleIdentity}
+                />
+              ))}
+
+              {/* Manual impressions entry (if API data not available) */}
+              {data && !data.impressionsAvailable && (
+                <div className="pt-2 border-t border-x-border">
+                  <label className="text-[10px] text-x-text-secondary block mb-1">
+                    Manual impression count (from{" "}
+                    <a
+                      href="https://analytics.x.com"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-x-accent underline"
+                    >
+                      analytics.x.com
+                    </a>
+                    )
+                  </label>
+                  <input
+                    type="text"
+                    defaultValue={
+                      data.manualImpressions > 0
+                        ? data.manualImpressions.toLocaleString()
+                        : ""
+                    }
+                    onBlur={(e) => onUpdateImpressions(e.target.value)}
+                    placeholder="e.g. 2500000"
+                    className="w-full px-2 py-1 text-xs bg-x-bg border border-x-border rounded-lg focus:border-x-accent focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {/* Coaching tips */}
+              {tips.length > 0 && (
+                <div className="pt-2 border-t border-x-border">
+                  <div className="text-xs font-medium text-x-text-secondary mb-2">
+                    Coaching
+                  </div>
+                  <div className="space-y-1.5">
+                    {tips.slice(0, 3).map((tip) => (
+                      <div key={tip.id} className="text-[11px]">
+                        <span
+                          className={
+                            tip.priority === "high"
+                              ? "text-x-red"
+                              : tip.priority === "medium"
+                                ? "text-x-yellow"
+                                : "text-x-green"
+                          }
+                        >
+                          {tip.priority === "high"
+                            ? "!"
+                            : tip.priority === "medium"
+                              ? "\u25CF"
+                              : "\u2713"}
+                        </span>{" "}
+                        {tip.title}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Check progress button */}
+              <button
+                onClick={onCheckProgress}
+                className="w-full px-3 py-1.5 bg-x-accent/10 text-x-accent rounded-full text-xs font-medium hover:bg-x-accent/20 transition-colors"
+              >
+                {data ? "Refresh Progress" : "Check Progress"}
+              </button>
+            </>
+          )}
+
+          {error && <p className="text-x-red text-xs">{error}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RequirementRow({
+  req,
+  isIdentityToggle,
+  onToggle,
+}: {
+  req: ReturnType<typeof getRequirements>[number];
+  isIdentityToggle?: boolean;
+  onToggle?: () => void;
+}) {
+  const percent =
+    req.target > 0
+      ? Math.min(100, Math.round((req.current / req.target) * 100))
+      : 0;
+
+  // For boolean requirements (active, identity, age)
+  if (req.manual || req.id === "active_30d") {
+    return (
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span
+            className={
+              req.met ? "text-x-green text-xs" : "text-x-text-secondary text-xs"
+            }
+          >
+            {req.met ? "\u2705" : "\u2B1C"}
+          </span>
+          <span className="text-xs">{req.label}</span>
+        </div>
+        {isIdentityToggle ? (
+          <button
+            onClick={onToggle}
+            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+              req.met
+                ? "border-x-green text-x-green"
+                : "border-x-border text-x-text-secondary hover:border-x-accent"
+            }`}
+          >
+            {req.met ? "Verified" : "Set verified"}
+          </button>
+        ) : (
+          <span className="text-xs text-x-green">
+            {req.met ? "\u2713" : ""}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  // Progress bar requirements (followers, impressions)
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2">
+          <span
+            className={
+              req.met ? "text-x-green text-xs" : "text-x-text-secondary text-xs"
+            }
+          >
+            {req.met ? "\u2705" : "\u2B1C"}
+          </span>
+          <span className="text-xs">{req.label}</span>
+        </div>
+        <span className="text-xs text-x-text-secondary">
+          {formatCount(req.current)}/{formatCount(req.target)}
+        </span>
+      </div>
+      <div
+        className="w-full bg-x-border rounded-full h-1.5 ml-5"
+        style={{ width: "calc(100% - 20px)" }}
+      >
+        <div
+          className="h-1.5 rounded-full transition-all"
+          style={{
+            width: `${percent}%`,
+            backgroundColor: req.met
+              ? "#00ba7c"
+              : percent >= 50
+                ? "#ffd400"
+                : "#f4212e",
+          }}
+        />
+      </div>
+      <div className="text-[10px] text-x-text-secondary text-right">
+        {percent}%
+      </div>
+    </div>
+  );
+}
+
+function getRelativeTime(isoString: string): string {
+  const diff = Date.now() - new Date(isoString).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function StatCard({
   label,
   value,
@@ -456,5 +964,27 @@ function StatCard({
       </div>
       <div className="text-xs text-x-text-secondary">{label}</div>
     </div>
+  );
+}
+
+function ClickableBadge({
+  label,
+  count,
+  color,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  color: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1 bg-x-bg px-2 py-1 rounded text-[11px] hover:bg-x-border transition-colors"
+    >
+      <span className={`font-semibold ${color}`}>{formatCount(count)}</span>
+      <span className="text-x-text-secondary">{label}</span>
+    </button>
   );
 }

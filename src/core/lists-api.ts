@@ -107,7 +107,7 @@ export async function fetchListMembers(listId: string): Promise<XListMember[]> {
     if (!nextCursor || nextCursor === "0") break;
     cursor = nextCursor;
 
-    await delay(1, 2);
+    await delay(2, 4);
   }
 
   return allMembers;

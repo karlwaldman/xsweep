@@ -11,7 +11,7 @@ export function categorizeByKeywords(
   user: UserProfile,
   lists: SmartList[],
 ): number[] {
-  const text = `${user.bio} ${user.displayName}`.toLowerCase();
+  const text = `${user.bio} ${user.displayName} ${user.username}`.toLowerCase();
   return lists
     .filter(
       (l) =>

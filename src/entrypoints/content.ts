@@ -5,7 +5,13 @@
  */
 
 import { extractBearerToken, isAuthenticated } from "../core/auth";
-import { fullScan, stopScan } from "../core/scanner";
+import {
+  fullScan,
+  stopScan,
+  scanVerifiedFollowers,
+  scanOwnTweets,
+  stopMonetizationScan,
+} from "../core/scanner";
 import { bulkUnfollow, stopUnfollow } from "../core/unfollower";
 import {
   fetchMyLists,
@@ -184,6 +190,54 @@ async function handleMessage(
         const error = e instanceof Error ? e.message : "Unknown error";
         sendResponse({ success: false, error });
       }
+      break;
+    }
+
+    case "SCAN_MONETIZATION": {
+      try {
+        await extractBearerToken();
+
+        // Phase 1: Scan followers
+        const followers = await scanVerifiedFollowers((progress) => {
+          sendMessage({
+            type: "MONETIZATION_PROGRESS",
+            data: { phase: "followers", ...progress },
+          });
+        });
+
+        // Phase 2: Scan own tweets
+        const tweets = await scanOwnTweets((progress) => {
+          sendMessage({
+            type: "MONETIZATION_PROGRESS",
+            data: { phase: "tweets", ...progress },
+          });
+        });
+
+        sendMessage({
+          type: "MONETIZATION_COMPLETE",
+          data: {
+            verifiedFollowers: followers.verified,
+            totalFollowers: followers.total,
+            organicImpressions: tweets.impressions,
+            impressionsAvailable: tweets.impressionsAvailable,
+            tweetsLast30Days: tweets.tweetsLast30,
+            tweetsLast90Days: tweets.tweetsLast90,
+            avgViewsPerTweet: tweets.avgViews,
+            topTweetViews: tweets.topViews,
+          },
+        });
+        sendResponse({ success: true });
+      } catch (e) {
+        const error = e instanceof Error ? e.message : "Unknown error";
+        sendMessage({ type: "MONETIZATION_ERROR", error });
+        sendResponse({ success: false, error });
+      }
+      break;
+    }
+
+    case "STOP_MONETIZATION": {
+      stopMonetizationScan();
+      sendResponse({ success: true });
       break;
     }
   }

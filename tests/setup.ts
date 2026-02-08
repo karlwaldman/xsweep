@@ -1,31 +1,36 @@
-import "fake-indexeddb/auto";
+/**
+ * Vitest global setup — stubs browser APIs not available in happy-dom.
+ */
+import { vi } from "vitest";
 
-// Chrome extension API mock
-const chromeStorageData: Record<string, string> = {};
+// In-memory storage for chrome.storage.local
+const storage: Record<string, unknown> = {};
 
-const chromeMock = {
+globalThis.chrome = {
   runtime: {
+    onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
     sendMessage: vi.fn().mockResolvedValue(undefined),
-    onMessage: {
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-    },
   },
   storage: {
     local: {
-      get: vi.fn((keys: string | string[]) => {
-        const result: Record<string, string> = {};
-        const keyArr = typeof keys === "string" ? [keys] : keys;
-        for (const k of keyArr) {
-          if (chromeStorageData[k] !== undefined) {
-            result[k] = chromeStorageData[k];
-          }
+      get: vi.fn(async (keys: string | string[]) => {
+        const result: Record<string, unknown> = {};
+        const keyList = Array.isArray(keys)
+          ? keys
+          : typeof keys === "string"
+            ? [keys]
+            : Object.keys(keys);
+        for (const key of keyList) {
+          if (key in storage) result[key] = storage[key];
         }
-        return Promise.resolve(result);
+        return result;
       }),
-      set: vi.fn((items: Record<string, string>) => {
-        Object.assign(chromeStorageData, items);
-        return Promise.resolve();
+      set: vi.fn(async (items: Record<string, unknown>) => {
+        Object.assign(storage, items);
+      }),
+      remove: vi.fn(async (keys: string | string[]) => {
+        const keyList = Array.isArray(keys) ? keys : [keys];
+        for (const key of keyList) delete storage[key];
       }),
     },
   },
@@ -33,28 +38,4 @@ const chromeMock = {
     query: vi.fn().mockResolvedValue([]),
     sendMessage: vi.fn().mockResolvedValue(undefined),
   },
-  sidePanel: {
-    open: vi.fn().mockResolvedValue(undefined),
-  },
-  action: {
-    onClicked: {
-      addListener: vi.fn(),
-    },
-  },
-};
-
-Object.defineProperty(globalThis, "chrome", {
-  value: chromeMock,
-  writable: true,
-});
-
-// Export for direct manipulation in tests
-export { chromeStorageData };
-
-// DOM mocks for export tests
-if (typeof URL.createObjectURL === "undefined") {
-  URL.createObjectURL = vi.fn(() => "blob:mock-url");
-}
-if (typeof URL.revokeObjectURL === "undefined") {
-  URL.revokeObjectURL = vi.fn();
-}
+} as unknown as typeof chrome;
